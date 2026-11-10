@@ -1468,6 +1468,13 @@ describe("performSessionRun", () => {
           config: { desiredModel: "Old Pro" },
           runtime: {
             submittedPromptHash,
+            promptAssociationFailure: {
+              version: 1 as const,
+              outcome: "rejected" as const,
+              reason: "text-mismatch" as const,
+              attempts: 1,
+              baselineAvailable: true,
+            },
             submittedPromptSha256: "a".repeat(64),
             submittedPromptLength: 123,
             submittedPromptMessageId: "old-message",
@@ -1506,6 +1513,7 @@ describe("performSessionRun", () => {
         expect(update?.browser).toEqual({
           config: { chromePath: null },
           runtime: {
+            promptAssociationFailure: null,
             submittedPromptHash: null,
             submittedPromptSha256: null,
             submittedPromptLength: null,
