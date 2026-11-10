@@ -2272,7 +2272,7 @@ async function runBrowserModeInternal(
         label,
         answerText: turnAnswerText,
         answerMarkdown: turnAnswerMarkdown,
-        answerHtml: turnAnswerHtml,
+        answerHtml: turnAnswer.html ?? "",
       };
     };
 
@@ -3877,7 +3877,7 @@ async function runRemoteBrowserMode(
         label,
         answerText: turnAnswerText,
         answerMarkdown: turnAnswerMarkdown,
-        answerHtml: turnAnswerHtml,
+        answerHtml: turnAnswer.html ?? "",
       };
     };
 
