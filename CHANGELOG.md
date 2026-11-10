@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Browser: recognize the exact GPT-6 picker radio for Astra alongside legacy Latest labels, preserve the observed selection label, and reject missing, ambiguous or unsupported model identities when selecting the model or its effort.
+
 - Browser: persist a SHA-256 digest, UTF-8 byte length and message identity from the observed submitted user turn, alongside the existing fingerprint. Opt-in `--browser-answer-capture json-code` binds answers to the same continuously observed conversation and unchanged user turn, returns the exact textContent of one JSON-labeled code body, excludes code-block controls, rejects mixed or ambiguous layouts, accepts a unique answer subtree within recorded assistant identity wrappers (including ARTICLE), revalidates layout and exact payload across code-header label changes, and disables archival. JSON capture refuses lost continuity on reload, legacy sessions without observed identity, Deep Research iframe output, follow-up transcripts, uploaded attachments (including upload fallback), unsupported Gemini execution and session tab harvest. Remote execution preserves the capture mode, checks the returned receipt and retains exact hashed answer bytes. Default `dom-text` preserves ordinary Markdown, legacy reattach and recovery, Deep Research and supported follow-ups without issuing attested answer relationships; generated-image response refreshes and saved-file summaries remain in returned text and Markdown.
 
 ## 0.21.4 - 2026-10-01

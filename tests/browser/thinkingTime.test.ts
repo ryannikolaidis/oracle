@@ -3142,7 +3142,7 @@ describe("unified Intelligence picker with Advanced -> Effort submenu", () => {
     return { ...dom, thumb, announcement, control, simple, keys };
   }
 
-  function buildCurrentAstraPicker(currentIndex: number, checkedModel = "Latest") {
+  function buildCurrentAstraPicker(currentIndex: number, checkedModel: string | string[] = "Latest") {
     const dom = buildDirectSlider(currentIndex);
     const trigger = new Node("Thinking effortThinking effort", {
       id: "current-model-trigger",
@@ -3151,18 +3151,13 @@ describe("unified Intelligence picker with Advanced -> Effort submenu", () => {
       "aria-expanded": "true",
     });
     const simple = new Node("", { "data-model-picker-view": "simple" }, [dom.control]);
-    const latest = new Node("Latest", {
-      role: "menuitemradio",
-      "aria-checked": checkedModel === "Latest" ? "true" : "false",
-    });
-    const sol = new Node("GPT-5.6 Sol", {
-      role: "menuitemradio",
-      "aria-checked": checkedModel === "GPT-5.6 Sol" ? "true" : "false",
-    });
+    const checkedLabels = Array.isArray(checkedModel) ? checkedModel : [checkedModel];
+    const radios = checkedLabels.map((label) => new Node(label, {
+      role: "menuitemradio", "aria-checked": "true",
+    }));
     const menu = new Node("6 Pro", { role: "menu", "aria-labelledby": trigger.id }, [
       simple,
-      latest,
-      sol,
+      ...radios,
     ]);
     const documentStub = {
       body: new Node(""),
@@ -3190,6 +3185,32 @@ describe("unified Intelligence picker with Advanced -> Effort submenu", () => {
       label: "Pro",
     });
     expect(dom.keys).toHaveLength(0);
+  });
+
+  it.each(["GPT-6", "Latest", "最新", "최신"])(
+    "verifies and changes effort only for the checked Astra model %s", async (model) => {
+      const selected = buildCurrentAstraPicker(4, model);
+      await expect(run(selected.documentStub, "pro", "Latest")).resolves.toEqual({
+        status: "already-selected", label: "Pro",
+      });
+      const medium = buildCurrentAstraPicker(1, model);
+      await expect(run(medium.documentStub, "pro", "Latest")).resolves.toEqual({
+        status: "switched", label: "Pro",
+      });
+      expect(medium.keys).toContain("ArrowRight");
+    },
+  );
+
+  it.each([
+    { models: ["Instant"] }, { models: ["GPT-5.6 Sol"] }, { models: ["GPT-6 Mini"] },
+    { models: ["GPT-6 Pro"] }, { models: ["GPT-6.1"] }, { models: [""] },
+    { models: [] }, { models: ["GPT-6", "GPT-5.6 Sol"] }, { models: ["GPT-6", "GPT-6"] },
+  ])("refuses unsupported, missing or ambiguous effort ownership $models", async ({ models }) => {
+    const dom = buildCurrentAstraPicker(1, models);
+    await expect(run(dom.documentStub, "pro", "Latest")).resolves.toMatchObject({
+      status: "selection-unverified",
+    });
+    expect(dom.keys).toEqual([]);
   });
 
   it("moves the current GPT-6 slider to Pro and rejects a checked Sol radio", async () => {

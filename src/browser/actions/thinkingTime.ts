@@ -12,6 +12,7 @@ import {
 import { logDomFailure } from "../domDebug.js";
 import { buildClickDispatcher } from "./domEvents.js";
 import { BrowserAutomationError } from "../../oracle/errors.js";
+import { ASTRA_MODEL_LABELS } from "./astraModelLabels.js";
 
 // Snapshot of the model-picker / thinking-effort subtree, captured at the moment
 // detection fails so a chip-not-found can be diagnosed without re-running with
@@ -1119,8 +1120,10 @@ function buildThinkingTimeExpression(
       const simple = simpleView();
       if (!simple || !isActiveSimple(simple) || !isVisible(simple)) return null;
       if (TARGET_IS_ASTRA_LATEST && simple.getAttribute('data-model-picker-view') === 'simple') {
-        const checked = menu.querySelector?.('[data-model-picker-view] [role="menuitemradio"][aria-checked="true"]');
-        if (!['Latest', '最新', '최신'].includes((checked?.textContent ?? '').trim())) {
+        const checked = Array.from(menu.querySelectorAll('[data-model-picker-view] [role="menuitemradio"][aria-checked="true"]'));
+        if (checked.length !== 1 || !${JSON.stringify(ASTRA_MODEL_LABELS)}.includes(
+          (checked[0].textContent ?? '').normalize('NFC').trim(),
+        )) {
           return failure('selection-unverified');
         }
       }
