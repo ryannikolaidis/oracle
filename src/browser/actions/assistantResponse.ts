@@ -867,7 +867,11 @@ function buildTurnActionLocatorJs(fnName: string): string {
     const safe = control => !control.closest('[data-user-message-bubble], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"], [data-message-author-role="user"], pre, code');
     const inside = Array.from((assistant || turn).querySelectorAll(inTurnSelector)).find(safe);
     if (inside) return inside;
-    const exchange = assistant?.closest?.(${exchangeLiteral}) || turn;
+    // Reuse the canonical exchange selected by turn enumeration. A nested
+    // assistant can carry its own key while the controls remain on that exchange.
+    const exchange = turn?.matches?.(${exchangeLiteral})
+      ? turn
+      : assistant?.closest?.(${exchangeLiteral}) || turn;
     if (!exchange) return null;
     return Array.from(exchange.querySelectorAll(besideSelector)).find(
       (control) =>

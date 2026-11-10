@@ -755,13 +755,16 @@ test.each([
         1,
         receipt.conversationId,
       );
-      const waited = expect(waiting).resolves.toMatchObject({
+      // Observe rejection immediately, then assert after advancing the fake clock.
+      const waited = Promise.allSettled([waiting]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      const [outcome] = await waited;
+      if (outcome.status === "rejected") throw outcome.reason;
+      const response = outcome.value;
+      expect(response).toMatchObject({
         text: text.trim(),
         meta: { messageId: "answer-original" },
       });
-      await vi.advanceTimersByTimeAsync(20_000);
-      await waited;
-      const response = await waiting;
       expect(observerFailed).toBe(recover);
       if (recover)
         expect(logs).toContain("Recovered and confirmed assistant response via polling fallback");
