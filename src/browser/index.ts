@@ -1711,11 +1711,18 @@ async function runBrowserModeInternal(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const observedPrompt = await (
-        strictAnswerCapture ? readBoundSubmittedPromptEvidence : readSubmittedPromptEvidence
-      )(Runtime, previousUserMessageIds, config.inputTimeoutMs);
+      const observedPrompt = strictAnswerCapture
+        ? await readBoundSubmittedPromptEvidence(
+            Runtime,
+            previousUserMessageIds,
+            prompt,
+            config.inputTimeoutMs,
+          )
+        : await readSubmittedPromptEvidence(Runtime, previousUserMessageIds, config.inputTimeoutMs);
       if (strictAnswerCapture && !observedPrompt)
-        throw new Error("No fresh observed user turn; refusing unbound answer capture");
+        throw new Error(
+          "No unique fresh user turn matching the submitted prompt; refusing unbound answer capture",
+        );
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
@@ -3417,11 +3424,18 @@ async function runRemoteBrowserMode(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const observedPrompt = await (
-        strictAnswerCapture ? readBoundSubmittedPromptEvidence : readSubmittedPromptEvidence
-      )(Runtime, previousUserMessageIds, config.inputTimeoutMs);
+      const observedPrompt = strictAnswerCapture
+        ? await readBoundSubmittedPromptEvidence(
+            Runtime,
+            previousUserMessageIds,
+            prompt,
+            config.inputTimeoutMs,
+          )
+        : await readSubmittedPromptEvidence(Runtime, previousUserMessageIds, config.inputTimeoutMs);
       if (strictAnswerCapture && !observedPrompt)
-        throw new Error("No fresh observed user turn; refusing unbound answer capture");
+        throw new Error(
+          "No unique fresh user turn matching the submitted prompt; refusing unbound answer capture",
+        );
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;

@@ -278,7 +278,7 @@ test("installs continuity observation atomically with the observed prompt read",
   expect(ordinary?.observationId).toBeUndefined();
   expect(observers).toHaveLength(0);
   expect(registry.__oraclePromptObservations).toBeUndefined();
-  expect(await readBoundSubmittedPromptEvidence(runtime, [])).toMatchObject(receipt);
+  expect(await readBoundSubmittedPromptEvidence(runtime, [], prompt)).toMatchObject(receipt);
   expect(observers).toHaveLength(1);
 });
 

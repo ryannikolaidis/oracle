@@ -46,13 +46,18 @@ export async function readSubmittedPromptFingerprint(
   return (await readSubmittedPromptEvidence(runtime, previousMessageIds, timeoutMs))?.fingerprint;
 }
 
-/** Session binding requires the conversation and observation from the same DOM read. */
+/**
+ * Bind only one fresh user turn to the actual submission. Normalize CRLF/lone CR
+ * to LF only: spaces, tabs, trailing newlines, case and Unicode remain significant.
+ * Conversation and observation identity must come from that same DOM read.
+ */
 export function readBoundSubmittedPromptEvidence(
   runtime: ChromeClient["Runtime"],
   previousMessageIds: readonly string[] | undefined,
+  submittedPrompt: string,
   timeoutMs = 0,
 ): Promise<SubmittedPromptEvidence | undefined> {
-  return readSubmittedPromptEvidence(runtime, previousMessageIds, timeoutMs, true);
+  return readSubmittedPromptEvidence(runtime, previousMessageIds, timeoutMs, true, submittedPrompt);
 }
 
 /** Read both digests from one fresh DOM turn; never substitute requested prompt text. */
@@ -61,19 +66,38 @@ export async function readSubmittedPromptEvidence(
   previousMessageIds: readonly string[] | undefined,
   timeoutMs = 0,
   requireContinuity = false,
+  submittedPrompt?: string,
 ): Promise<SubmittedPromptEvidence | undefined> {
-  if (previousMessageIds === undefined) return undefined;
+  if (previousMessageIds === undefined || (requireContinuity && typeof submittedPrompt !== "string"))
+    return undefined;
   const previous = new Set(previousMessageIds);
+  const normalizedSubmittedPrompt = submittedPrompt?.replace(/\r\n?/g, "\n");
   return readDomUntil(
     runtime,
     `(() => {
-        const turns = ${buildConversationTurnListExpression()};
+        const turns = ${requireContinuity ? `(() => {
+          const users = Array.from(document.querySelectorAll(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])'));
+          const previous = ${JSON.stringify([...previous])};
+          const fresh = [];
+          for (const user of users) {
+            const id = ${buildUserMessageIdExpression()};
+            // An unidentified user could be a competing submission. Never skip it.
+            if (typeof id !== 'string' || !id.trim()) return null;
+            if (!previous.includes(id)) fresh.push(user);
+          }
+          if (fresh.length > 1) return null;
+          return fresh;
+        })()` : buildConversationTurnListExpression()};
+        if (turns === null) return { associationRejected: true };
         for (let index = turns.length - 1; index >= 0; index--) {
           const turn = turns[index];
           const user = turn.matches(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])') ? turn : turn.querySelector(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])');
           if (user) {
             const messageId = ${buildUserMessageIdExpression()};
             if (${JSON.stringify([...previous])}.includes(messageId)) return null;
+            ${requireContinuity ? `const text = (user.querySelector('[data-user-message-bubble="true"]') || user).textContent;
+            if (typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)})
+              return { associationRejected: true };` : ""}
             return {
               observationId: ${requireContinuity ? `typeof location === 'object' ? ${buildPromptObservationExpression()} : undefined` : "undefined"},
               conversationId: typeof location === 'object' && typeof location.href === 'string' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
@@ -98,6 +122,7 @@ export async function readSubmittedPromptEvidence(
         typeof turn.messageId === "string" &&
         turn.messageId.trim() &&
         !previous.has(turn.messageId) &&
+        (!requireContinuity || turn.text.replace(/\r\n?/g, "\n") === normalizedSubmittedPrompt) &&
         (!requireContinuity ||
           (typeof turn.conversationId === "string" &&
             turn.conversationId.trim() &&
@@ -120,6 +145,9 @@ export async function readSubmittedPromptEvidence(
       }
       return undefined;
     },
+    requireContinuity
+      ? (value) => (value as { associationRejected?: unknown } | null)?.associationRejected === true
+      : undefined,
   );
 }
 
@@ -128,11 +156,13 @@ async function readDomUntil<T>(
   expression: string,
   timeoutMs: number,
   select: (value: unknown) => T | undefined,
+  reject?: (value: unknown) => boolean,
 ): Promise<T | undefined> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
   for (;;) {
     try {
       const result = await runtime.evaluate({ expression, returnByValue: true });
+      if (reject?.(result.result?.value)) return undefined;
       const selected = select(result.result?.value);
       if (selected !== undefined) return selected;
     } catch (error) {

@@ -89,7 +89,7 @@ describe("ChatGPT Chat/Work semantic layout", () => {
     expect(evidence).toMatchObject({ messageId: "stable-turn", length: 10 });
     expect(evidence?.observationId).toBeUndefined();
     expect(evidence?.conversationId).toBeUndefined();
-    expect(await readBoundSubmittedPromptEvidence(r, [])).toBeUndefined();
+    expect(await readBoundSubmittedPromptEvidence(r, [], "new prompt")).toBeUndefined();
   });
   test("ignores nested legacy wrappers inside the canonical new wrapper", () => {
     const { document, turn } = fixture();
