@@ -398,19 +398,20 @@ function strictDomRuntime(initial: FakeElement[]) {
 }
 
 function committedUser(text: string, id?: string) {
-  return new FakeElement("div", {
-    "data-message-author-role": "user",
-    ...(id ? { "data-message-id": id } : {}),
-  }, [new FakeElement("div", { "data-user-message-bubble": "true" }, [], text)]);
+  return new FakeElement(
+    "div",
+    {
+      "data-message-author-role": "user",
+      ...(id ? { "data-message-id": id } : {}),
+    },
+    [new FakeElement("div", { "data-user-message-bubble": "true" }, [], text)],
+  );
 }
 
 test("strict association matches the full submission with line-ending normalization only", async () => {
   const submitted = "  Hé😀\r\n\tCase\rline  \n";
   const observed = "  Hé😀\n\tCase\nline  \n";
-  const page = strictDomRuntime([
-    committedUser(observed, "old"),
-    committedUser(observed, "new"),
-  ]);
+  const page = strictDomRuntime([committedUser(observed, "old"), committedUser(observed, "new")]);
   const evidence = await readBoundSubmittedPromptEvidence(page.runtime, ["old"], submitted);
   expect(evidence).toEqual({
     fingerprint: browserPromptFingerprint(observed, "new"),
@@ -432,9 +433,9 @@ test.each([
   "  Hé😀\n\tCase\nline  \nextra",
 ])("strict association refuses changed submission bytes: %j", async (observed) => {
   const page = strictDomRuntime([committedUser(observed, "new")]);
-  expect(await readBoundSubmittedPromptEvidence(
-    page.runtime, [], "  Hé😀\r\n\tCase\rline  \n", 1000,
-  )).toBeUndefined();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], "  Hé😀\r\n\tCase\rline  \n", 1000),
+  ).toBeUndefined();
   expect(page.calls).toBe(1);
   expect(page.observations).toBe(0);
 });
@@ -445,26 +446,35 @@ test.each([
   [committedUser("Oracle prompt A", "a"), committedUser("Oracle prompt A", "b")],
   [committedUser("Oracle prompt A", "a"), committedUser("Oracle prompt A", "a")],
   [committedUser("Oracle prompt A", "a"), committedUser("Concurrent prompt B")],
-])("strict association rejects competing fresh user nodes without polling away ambiguity: %#", async (...users) => {
-  const page = strictDomRuntime(users);
-  const evaluate = page.runtime.evaluate.bind(page.runtime);
-  page.runtime.evaluate = (async (params: { expression: string }) => {
-    const result = await evaluate(params);
-    // Even if the competing turn disappears before the next poll, this read is fatal.
-    page.replace([committedUser("Oracle prompt A", "a")]);
-    return result;
-  }) as typeof page.runtime.evaluate;
-  expect(await readBoundSubmittedPromptEvidence(page.runtime, [], "Oracle prompt A", 1000)).toBeUndefined();
-  expect(page.calls).toBe(1);
-  expect(page.observations).toBe(0);
-});
+])(
+  "strict association rejects competing fresh user nodes without polling away ambiguity: %#",
+  async (...users) => {
+    const page = strictDomRuntime(users);
+    const evaluate = page.runtime.evaluate.bind(page.runtime);
+    page.runtime.evaluate = (async (params: { expression: string }) => {
+      const result = await evaluate(params);
+      // Even if the competing turn disappears before the next poll, this read is fatal.
+      page.replace([committedUser("Oracle prompt A", "a")]);
+      return result;
+    }) as typeof page.runtime.evaluate;
+    expect(
+      await readBoundSubmittedPromptEvidence(page.runtime, [], "Oracle prompt A", 1000),
+    ).toBeUndefined();
+    expect(page.calls).toBe(1);
+    expect(page.observations).toBe(0);
+  },
+);
 
 test("strict association rejects a single unrelated fresh turn and a missing baseline", async () => {
   const page = strictDomRuntime([committedUser("Concurrent prompt B", "b")]);
-  expect(await readBoundSubmittedPromptEvidence(page.runtime, [], "Oracle prompt A", 1000)).toBeUndefined();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], "Oracle prompt A", 1000),
+  ).toBeUndefined();
   expect(page.calls).toBe(1);
   expect(page.observations).toBe(0);
-  expect(await readBoundSubmittedPromptEvidence(page.runtime, undefined, "Oracle prompt A")).toBeUndefined();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, undefined, "Oracle prompt A"),
+  ).toBeUndefined();
   expect(page.calls).toBe(1);
 });
 
@@ -476,9 +486,9 @@ test("strict association still waits when no fresh user turn has mounted", async
     page.replace([committedUser("submitted prompt", "new")]);
     return result;
   }) as typeof page.runtime.evaluate;
-  expect(await readBoundSubmittedPromptEvidence(
-    page.runtime, ["old"], "submitted prompt", 1000,
-  )).toMatchObject({ messageId: "new", observationId: "observation" });
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, ["old"], "submitted prompt", 1000),
+  ).toMatchObject({ messageId: "new", observationId: "observation" });
   expect(page.calls).toBe(2);
   expect(page.observations).toBe(1);
 });

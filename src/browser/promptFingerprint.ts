@@ -68,14 +68,19 @@ export async function readSubmittedPromptEvidence(
   requireContinuity = false,
   submittedPrompt?: string,
 ): Promise<SubmittedPromptEvidence | undefined> {
-  if (previousMessageIds === undefined || (requireContinuity && typeof submittedPrompt !== "string"))
+  if (
+    previousMessageIds === undefined ||
+    (requireContinuity && typeof submittedPrompt !== "string")
+  )
     return undefined;
   const previous = new Set(previousMessageIds);
   const normalizedSubmittedPrompt = submittedPrompt?.replace(/\r\n?/g, "\n");
   return readDomUntil(
     runtime,
     `(() => {
-        const turns = ${requireContinuity ? `(() => {
+        const turns = ${
+          requireContinuity
+            ? `(() => {
           const users = Array.from(document.querySelectorAll(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])'));
           const previous = ${JSON.stringify([...previous])};
           const fresh = [];
@@ -87,7 +92,9 @@ export async function readSubmittedPromptEvidence(
           }
           if (fresh.length > 1) return null;
           return fresh;
-        })()` : buildConversationTurnListExpression()};
+        })()`
+            : buildConversationTurnListExpression()
+        };
         if (turns === null) return { associationRejected: true };
         for (let index = turns.length - 1; index >= 0; index--) {
           const turn = turns[index];
@@ -95,9 +102,13 @@ export async function readSubmittedPromptEvidence(
           if (user) {
             const messageId = ${buildUserMessageIdExpression()};
             if (${JSON.stringify([...previous])}.includes(messageId)) return null;
-            ${requireContinuity ? `const text = (user.querySelector('[data-user-message-bubble="true"]') || user).textContent;
+            ${
+              requireContinuity
+                ? `const text = (user.querySelector('[data-user-message-bubble="true"]') || user).textContent;
             if (typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)})
-              return { associationRejected: true };` : ""}
+              return { associationRejected: true };`
+                : ""
+            }
             return {
               observationId: ${requireContinuity ? `typeof location === 'object' ? ${buildPromptObservationExpression()} : undefined` : "undefined"},
               conversationId: typeof location === 'object' && typeof location.href === 'string' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
