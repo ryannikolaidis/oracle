@@ -1,3 +1,4 @@
+import { releasePromptObservation } from "./promptObservation.js";
 import { restoreAnswerBinding, type AnswerRelationship } from "./answerBinding.js";
 import {
   finalizeBoundAssistantAnswer,
@@ -326,6 +327,7 @@ async function resumeBrowserSessionInternal(
       await cancellation.call(() =>
         verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture),
       );
+      await releasePromptObservation(Runtime, runtime.submittedPromptObservationId);
     }
     await closeAttached();
     return {
@@ -600,6 +602,7 @@ async function resumeBrowserSessionViaNewChrome(
       await cancellation.call(() =>
         verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture),
       );
+      await releasePromptObservation(Runtime, runtime.submittedPromptObservationId);
     }
     return {
       answerText: bound.text,

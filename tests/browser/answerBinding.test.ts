@@ -20,7 +20,7 @@ import {
   readBoundSubmittedPromptEvidence,
   readSubmittedPromptEvidence,
 } from "../../src/browser/promptFingerprint.js";
-import { buildPromptObservationExpression } from "../../src/browser/promptObservation.js";
+import { buildPromptObservationExpression, releasePromptObservation } from "../../src/browser/promptObservation.js";
 import { FakeDocument, FakeElement } from "./domFixture.js";
 import { readStructuredAnswer } from "../../src/browser/structuredAnswer.js";
 
@@ -692,3 +692,29 @@ test.each(["message-id", "turn-key"])(
     expect(result.answerRelationship.assistantMessageId).toBe("answer-original");
   },
 );
+
+test("releases only the completed observation and refuses subsequent bound reads", async () => {
+  const p = page();
+  let disconnected = 0;
+  class Observer {
+    constructor(_callback: unknown) {}
+    observe() {}
+    disconnect() { disconnected += 1; }
+  }
+  const observed = p.document.querySelector('[data-message-author-role="user"]');
+  new Function("document", "location", "globalThis", "MutationObserver", "crypto", "observed",
+    `return ${buildPromptObservationExpression("observed")}`,
+  )(p.document, p.location, { __oraclePromptObservations: p.registry }, Observer,
+    { randomUUID: () => receipt.observationId }, observed);
+  const other = { invalidated: false, conversationId: "other" };
+  p.registry.set("other", other);
+  await expect(evaluateBoundAnswer(p.runtime, selection)).resolves.toBeDefined();
+  expect(disconnected).toBe(0);
+  await releasePromptObservation(p.runtime, receipt.observationId);
+  expect(disconnected).toBe(1);
+  expect(p.registry.has(receipt.observationId)).toBe(false);
+  expect(p.registry.get("other")).toBe(other);
+  await releasePromptObservation(p.runtime, receipt.observationId);
+  expect(disconnected).toBe(1);
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/observation lost or invalidated/);
+});

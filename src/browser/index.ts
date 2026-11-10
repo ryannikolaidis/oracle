@@ -1,3 +1,5 @@
+import { releasePromptObservation } from "./promptObservation.js";
+import { assertAttestableAttachments } from "./strictCapture.js";
 import {
   bindSubmittedAnswer,
   requireAnswerBinding,
@@ -125,7 +127,7 @@ import {
   saveBrowserTranscriptArtifact,
   saveDeepResearchReportArtifact,
 } from "./artifacts.js";
-import { collectGeneratedImageArtifacts } from "./chatgptImages.js";
+import { collectGeneratedImageArtifacts, mergeGeneratedImageAnswer } from "./chatgptImages.js";
 import { collectChatGptFileArtifacts } from "./chatgptFiles.js";
 import { runProviderSubmissionFlow } from "./providerDomFlow.js";
 import { chatgptDomProvider } from "./providers/index.js";
@@ -555,6 +557,7 @@ async function runSubmissionWithRecovery({
   prompt,
   attachments,
   fallbackSubmission,
+  answerCapture,
   submit,
   reloadPromptComposer,
   prepareFallbackSubmission,
@@ -563,11 +566,13 @@ async function runSubmissionWithRecovery({
   prompt: string;
   attachments: BrowserAttachment[];
   fallbackSubmission?: BrowserSubmissionFallback;
+  answerCapture?: "dom-text" | "json-code";
   submit: (prompt: string, attachments: BrowserAttachment[]) => Promise<BrowserSubmissionResult>;
   reloadPromptComposer: () => Promise<void>;
   prepareFallbackSubmission: () => Promise<void>;
   logger: BrowserLogger;
 }): Promise<BrowserSubmissionResult> {
+  assertAttestableAttachments(answerCapture, attachments);
   let currentPrompt = prompt;
   let currentAttachments = attachments;
   let retriedDeadComposer = false;
@@ -586,11 +591,13 @@ async function runSubmissionWithRecovery({
 
       const isPromptTooLarge = hasBrowserErrorCode(error, "prompt-too-large");
       if (fallbackSubmission && isPromptTooLarge && !usedFallbackSubmission) {
+        assertAttestableAttachments(answerCapture, fallbackSubmission.attachments);
         usedFallbackSubmission = true;
         logger("[browser] Inline prompt too large; retrying with file uploads.");
         if (fallbackSubmission.prepare) {
           await fallbackSubmission.prepare();
         }
+        assertAttestableAttachments(answerCapture, fallbackSubmission.attachments);
         assertUniqueAttachmentBasenames(fallbackSubmission.attachments, {
           stage: "upload-fallback",
           subject: "The inline prompt was too large, but its upload fallback",
@@ -610,6 +617,7 @@ export async function runSubmissionWithRecoveryForTest(args: {
   prompt: string;
   attachments: BrowserAttachment[];
   fallbackSubmission?: BrowserSubmissionFallback;
+  answerCapture?: "dom-text" | "json-code";
   submit: (prompt: string, attachments: BrowserAttachment[]) => Promise<BrowserSubmissionResult>;
   reloadPromptComposer: () => Promise<void>;
   prepareFallbackSubmission: () => Promise<void>;
@@ -881,6 +889,7 @@ async function runBrowserModeInternal(
   let config = resolveBrowserConfig(options.config);
   const deepResearch = config.researchMode === "deep";
   const strictAnswerCapture = config.answerCapture === "json-code";
+  assertAttestableAttachments(config.answerCapture, attachments);
   if (
     strictAnswerCapture &&
     (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0)
@@ -1603,6 +1612,7 @@ async function runBrowserModeInternal(
       await withoutBrowserCancellation(() => handle.release()).catch(() => undefined);
     };
     const submitOnce = async (prompt: string, submissionAttachments: BrowserAttachment[]) => {
+      assertAttestableAttachments(config.answerCapture, submissionAttachments);
       await claimBrowserTarget(Runtime, targetClaimId);
       const baselineSnapshot = await readAssistantSnapshot(Runtime).catch(() => null);
       const baselineAssistantText =
@@ -1768,6 +1778,7 @@ async function runBrowserModeInternal(
         prompt: promptText,
         attachments,
         fallbackSubmission,
+        answerCapture: config.answerCapture,
         submit: (submissionPrompt, submissionAttachments) =>
           raceWithDisconnect(submitOnce(submissionPrompt, submissionAttachments)),
         reloadPromptComposer,
@@ -2379,8 +2390,9 @@ async function runBrowserModeInternal(
           },
         }),
     });
-    // Image download summaries belong to generatedImages/savedImages/artifacts.
-    // Keep the verified assistant bytes unchanged through the return gate.
+    ({ answerText, answerMarkdown } = mergeGeneratedImageAnswer(
+      { answerText, answerMarkdown }, imageArtifacts, config.answerCapture,
+    ));
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
       Client: client,
@@ -2447,6 +2459,7 @@ async function runBrowserModeInternal(
         config.answerCapture,
       );
     }
+    if (strictAnswerCapture) await releasePromptObservation(Runtime, submittedPromptObservationId);
     runStatus = "complete";
     const durationMs = Date.now() - startedAt;
     const answerChars = answerText.length;
@@ -3010,6 +3023,7 @@ async function runRemoteBrowserMode(
 ): Promise<BrowserRunResult> {
   const deepResearch = config.researchMode === "deep";
   const strictAnswerCapture = config.answerCapture === "json-code";
+  assertAttestableAttachments(config.answerCapture, attachments);
   if (
     strictAnswerCapture &&
     (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0)
@@ -3316,6 +3330,7 @@ async function runRemoteBrowserMode(
       );
     }
     const submitOnce = async (prompt: string, submissionAttachments: BrowserAttachment[]) => {
+      assertAttestableAttachments(config.answerCapture, submissionAttachments);
       await claimBrowserTarget(Runtime, targetClaimId);
       const baselineSnapshot = await readAssistantSnapshot(Runtime).catch(() => null);
       const baselineAssistantText =
@@ -3439,6 +3454,7 @@ async function runRemoteBrowserMode(
       prompt: promptText,
       attachments,
       fallbackSubmission: options.fallbackSubmission,
+      answerCapture: config.answerCapture,
       submit: submitOnce,
       reloadPromptComposer,
       prepareFallbackSubmission: async () => {
@@ -3990,8 +4006,9 @@ async function runRemoteBrowserMode(
           },
         }),
     });
-    // Image download summaries belong to generatedImages/savedImages/artifacts.
-    // Keep the verified assistant bytes unchanged through the return gate.
+    ({ answerText, answerMarkdown } = mergeGeneratedImageAnswer(
+      { answerText, answerMarkdown }, imageArtifacts, config.answerCapture,
+    ));
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
       Client: client,
@@ -4062,6 +4079,7 @@ async function runRemoteBrowserMode(
         config.answerCapture,
       );
     }
+    if (strictAnswerCapture) await releasePromptObservation(Runtime, submittedPromptObservationId);
     runStatus = "complete";
     return {
       answerText,

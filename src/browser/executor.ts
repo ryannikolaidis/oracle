@@ -1,3 +1,4 @@
+import { assertSupportedAnswerCapture } from "./strictCapture.js";
 import type { RunOracleOptions } from "../oracle/types.js";
 import type { BrowserRunOptions, BrowserRunResult } from "./types.js";
 import { resolveBrowserProvider } from "./provider.js";
@@ -26,11 +27,15 @@ export async function resolveBrowserExecutor(
   }
   if (remote) {
     const { createRemoteBrowserExecutor } = await import("../remote/client.js");
-    return createRemoteBrowserExecutor({ ...remote, runOptions: options });
+    const execute = createRemoteBrowserExecutor({ ...remote, runOptions: options });
+    return async (runOptions) => {
+      assertSupportedAnswerCapture(runOptions.config?.answerCapture, provider);
+      return execute(runOptions);
+    };
   }
   if (provider === "gemini") {
     const { createGeminiWebExecutor } = await import("../gemini-web/index.js");
-    return createGeminiWebExecutor({
+    const execute = createGeminiWebExecutor({
       youtube: options.youtube,
       generateImage: options.generateImage,
       editImage: options.editImage,
@@ -39,6 +44,10 @@ export async function resolveBrowserExecutor(
       showThoughts: options.geminiShowThoughts,
       allowModelFallback: options.geminiAllowModelFallback,
     });
+    return async (runOptions) => {
+      assertSupportedAnswerCapture(runOptions.config?.answerCapture, provider);
+      return execute(runOptions);
+    };
   }
   return (await import("../browserMode.js")).runBrowserMode;
 }

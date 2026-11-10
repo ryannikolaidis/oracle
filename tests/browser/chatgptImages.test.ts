@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   collectGeneratedImageArtifacts,
+  mergeGeneratedImageAnswer,
   readAssistantGeneratedImages,
   resolveGeneratedImageWaitTimeoutMsForTest,
   saveChatGptGeneratedImages,
@@ -700,6 +701,14 @@ describe("collectGeneratedImageArtifacts", () => {
       path.join(tmpHome, "sessions", "image-session", "artifacts"),
     );
     expect(result.markdownSuffix).toContain("Saved to:");
+    for (const mode of [undefined, "dom-text"] as const) {
+      const answer = mergeGeneratedImageAnswer({ answerText: "stale", answerMarkdown: "**Original**" }, result, mode);
+      expect(answer.answerText).toBe(result.answerText);
+      expect(answer.answerMarkdown).toBe("**Original**" + result.markdownSuffix);
+      expect(answer.answerMarkdown).toContain(result.savedImages[0]!.path);
+    }
+    const strictAnswer = { answerText: ' \n{"ok":true}\n ', answerMarkdown: ' \n{"ok":true}\n ' };
+    expect(mergeGeneratedImageAnswer(strictAnswer, result, "json-code")).toEqual(strictAnswer);
     await expect(fs.readFile(result.savedImages[0]!.path)).resolves.toEqual(
       Buffer.from([4, 3, 2, 1]),
     );
@@ -756,4 +765,11 @@ describe("collectGeneratedImageArtifacts", () => {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }
   });
+});
+
+test.each([undefined, "dom-text"] as const)("retains existing text when the image collector has no refresh (%s)", (mode) => {
+  expect(mergeGeneratedImageAnswer(
+    { answerText: "Existing answer", answerMarkdown: "**Existing answer**" },
+    { answerText: "", markdownSuffix: "" }, mode,
+  )).toEqual({ answerText: "Existing answer", answerMarkdown: "**Existing answer**" });
 });

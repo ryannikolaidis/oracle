@@ -1,3 +1,5 @@
+import type { ChromeClient } from "./types.js";
+
 /** Install at the exact read that attests the user bubble, before yielding to the page. */
 export function buildPromptObservationExpression(user = "user"): string {
   return `((user) => {
@@ -28,7 +30,25 @@ export function buildPromptObservationExpression(user = "user"): string {
       if (!user.isConnected || location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] !== conversationId) observation.invalidated = true;
     });
     observer.observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true });
+    observation.disconnect = () => observer.disconnect();
     registry.set(key, observation);
     return key;
   })(${user})`;
+}
+
+/** Completed captures no longer need continuity; incomplete runs retain it for reattach. */
+export async function releasePromptObservation(
+  runtime: ChromeClient["Runtime"],
+  observationId: string | null | undefined,
+): Promise<void> {
+  if (!observationId) return;
+  await runtime.evaluate({
+    expression: `(() => {
+      const registry = globalThis.__oraclePromptObservations;
+      const key = ${JSON.stringify(observationId)};
+      registry?.get(key)?.disconnect?.();
+      registry?.delete(key);
+    })()`,
+    returnByValue: true,
+  }).catch(() => undefined);
 }
