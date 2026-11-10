@@ -550,13 +550,13 @@ test.each([
   page.mutate(
     scenario === "new user turn"
       ? [
-        {
-          type: "childList",
-          target: recorded.turn,
-          addedNodes: [committedUser("other", "new-user")],
-          removedNodes: [],
-        },
-      ]
+          {
+            type: "childList",
+            target: recorded.turn,
+            addedNodes: [committedUser("other", "new-user")],
+            removedNodes: [],
+          },
+        ]
       : [oldValue, transient].map((value) => ({
           type: "attributes",
           target,
