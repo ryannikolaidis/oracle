@@ -1416,6 +1416,9 @@ describe("performSessionRun", () => {
             submittedPromptSha256: null,
             submittedPromptLength: null,
             submittedPromptMessageId: null,
+            submittedPromptConversationId: null,
+            submittedPromptObservationId: null,
+            answerRelationship: null,
           },
         });
       }
