@@ -81,7 +81,13 @@ export async function readSubmittedPromptEvidence(
         const turns = ${
           requireContinuity
             ? `(() => {
-          const users = Array.from(document.querySelectorAll(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])'));
+          const selector = ':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])';
+          const users = Array.from(document.querySelectorAll(selector)).filter(user => {
+            const owner = user.parentElement?.closest(selector);
+            // Nested role wrappers in one turn represent one message. Separate
+            // turns stay distinct even when their text or reported IDs agree.
+            return !owner || owner.closest('[data-turn-key]') !== user.closest('[data-turn-key]');
+          });
           const previous = ${JSON.stringify([...previous])};
           const fresh = [];
           for (const user of users) {

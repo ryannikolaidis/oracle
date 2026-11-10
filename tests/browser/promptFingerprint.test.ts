@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import {
   browserPromptFingerprint,
@@ -407,6 +408,126 @@ function committedUser(text: string, id?: string) {
     [new FakeElement("div", { "data-user-message-bubble": "true" }, [], text)],
   );
 }
+
+// Read the recorded user subtree, including both nested role wrappers and the
+// bubble's controls. Keep its enclosing turn identity from the same fixture.
+function recordedUserTurn() {
+  const html = readFileSync(
+    new URL("../fixtures/chatgpt-dom-2026-09/completed.html", import.meta.url),
+    "utf8",
+  );
+  const start = html.indexOf('<div class="group/user-message flex flex-col items-end gap-2"');
+  expect(start).toBeGreaterThan(0);
+  const turnId = Array.from(html.slice(0, start).matchAll(/data-turn-key="([^"]+)"/g)).at(-1)![1]!;
+  const tokens = html.slice(start).match(/<[^>]+>|[^<]+/g)!;
+  let cursor = 0;
+  const parse = (): FakeElement => {
+    const opening = tokens[cursor++]!;
+    const name = opening.match(/^<([a-z0-9]+)/i)![1]!;
+    const attributes = Object.fromEntries(
+      Array.from(opening.matchAll(/([\w-]+)="([^"]*)"/g), (match) => [match[1]!, match[2]!]),
+    );
+    const children: FakeElement[] = [];
+    let text = "";
+    while (cursor < tokens.length && !tokens[cursor]!.startsWith("</")) {
+      if (tokens[cursor]!.startsWith("<")) children.push(parse());
+      else text += tokens[cursor++];
+    }
+    cursor++;
+    return new FakeElement(name, attributes, children, text);
+  };
+  const user = parse();
+  const inner = user.querySelector('[data-content-search-unit-key$=":user"]')!;
+  const bubble = user.querySelector('[data-user-message-bubble="true"]')!;
+  expect(user.getAttribute("data-chatgpt-search-unit-key")).toBe("fallback-turn-0:0:user");
+  expect(inner.getAttribute("data-content-search-unit-key")).toBe("fallback-turn-0:0:user");
+  expect(bubble.textContent).toBe("Reply with exactly: OK");
+  return {
+    turn: new FakeElement("div", { "data-turn-key": turnId }, [user]),
+    user,
+    inner,
+    bubble,
+    messageId: user.getAttribute("data-chatgpt-search-message-ids")!,
+  };
+}
+
+test("strict association accepts one recorded user message with nested role wrappers", async () => {
+  const recorded = recordedUserTurn();
+  const page = strictDomRuntime([recorded.turn]);
+  const prompt = recorded.bubble.textContent;
+  expect(await readBoundSubmittedPromptEvidence(page.runtime, [], prompt)).toEqual({
+    fingerprint: browserPromptFingerprint(prompt, recorded.messageId),
+    sha256: createHash("sha256").update(prompt, "utf8").digest("hex"),
+    length: Buffer.byteLength(prompt, "utf8"),
+    messageId: recorded.messageId,
+    conversationId: "conversation",
+    observationId: "observation",
+  });
+  expect(page.calls).toBe(1);
+  expect(page.observations).toBe(1);
+});
+
+test.each([
+  "different identity",
+  "equal identity",
+  "same enclosing turn",
+  "nested distinct turn",
+  "missing identity",
+])(
+  "strict association rejects a recorded message plus a distinct fresh message: %s",
+  async (scenario) => {
+    const recorded = recordedUserTurn();
+    const other = recordedUserTurn();
+    let elements = [recorded.turn, other.turn];
+    if (scenario === "different identity") {
+      other.user.setAttribute("data-chatgpt-search-message-ids", "different-user");
+      other.turn.setAttribute("data-turn-key", "different-turn");
+    } else if (scenario === "same enclosing turn") {
+      recorded.turn.append(other.user);
+      elements = [recorded.turn];
+    } else if (scenario === "nested distinct turn") {
+      recorded.user.append(other.turn);
+      elements = [recorded.turn];
+    } else if (scenario === "missing identity") {
+      elements = [recorded.turn, committedUser(recorded.bubble.textContent)];
+    }
+    const page = strictDomRuntime(elements);
+    expect(
+      await readBoundSubmittedPromptEvidence(page.runtime, [], recorded.bubble.textContent, 1000),
+    ).toBeUndefined();
+    expect(page.calls).toBe(1);
+    expect(page.observations).toBe(0);
+  },
+);
+
+test("strict association refuses a recorded nested message without any usable identity", async () => {
+  const recorded = recordedUserTurn();
+  recorded.turn.setAttribute("data-turn-key", "");
+  for (const node of [recorded.user, recorded.inner]) {
+    node.setAttribute("data-message-author-role", "user");
+    node.setAttribute("data-chatgpt-search-message-ids", "");
+    node.setAttribute("data-chatgpt-search-unit-key", "");
+    node.setAttribute("data-content-search-unit-key", "");
+  }
+  const page = strictDomRuntime([recorded.turn]);
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], recorded.bubble.textContent, 1000),
+  ).toBeUndefined();
+  expect(page.calls).toBe(1);
+  expect(page.observations).toBe(0);
+});
+
+test.each(["Reply with exactly: ok", "Reply with exactly: OK ", "Reply with exactly: OK\n"])(
+  "strict association refuses an altered prompt against the recorded nested message: %j",
+  async (submitted) => {
+    const page = strictDomRuntime([recordedUserTurn().turn]);
+    expect(
+      await readBoundSubmittedPromptEvidence(page.runtime, [], submitted, 1000),
+    ).toBeUndefined();
+    expect(page.calls).toBe(1);
+    expect(page.observations).toBe(0);
+  },
+);
 
 test("strict association matches the full submission with line-ending normalization only", async () => {
   const submitted = "  Hé😀\r\n\tCase\rline  \n";
