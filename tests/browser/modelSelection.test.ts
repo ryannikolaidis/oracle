@@ -24,9 +24,13 @@ const evaluateImmediateModelSelectionExpression = (
     innerText: buttonLabel,
     id: modernCheckedModel ? "current-model-trigger" : "",
   };
-  const currentRadios = (Array.isArray(modernCheckedModel)
-    ? modernCheckedModel : modernCheckedModel ? [modernCheckedModel] : [])
-    .map((textContent) => ({ textContent }));
+  const currentRadios = (
+    Array.isArray(modernCheckedModel)
+      ? modernCheckedModel
+      : modernCheckedModel
+        ? [modernCheckedModel]
+        : []
+  ).map((textContent) => ({ textContent }));
   const currentMenu = modernCheckedModel
     ? {
         getAttribute: (name: string) => (name === "aria-labelledby" ? modelButton.id : null),
@@ -1408,61 +1412,79 @@ describe("browser model selection matchers", () => {
   });
 
   it("reads GPT-6 from the checked current picker without replacing it with Latest", () => {
-    expect(evaluateImmediateModelSelectionExpression("Latest", "Pro", "", "", "GPT-6"))
-      .toEqual({ status: "already-selected", label: "GPT-6" });
+    expect(evaluateImmediateModelSelectionExpression("Latest", "Pro", "", "", "GPT-6")).toEqual({
+      status: "already-selected",
+      label: "GPT-6",
+    });
   });
 
   it.each(["Instant", "GPT-5.6 Sol", "GPT-6 Mini", "GPT-6 Pro", "GPT-6.1", "", "GPT-6 Latest"])(
     "rejects the unsupported Astra radio %j in selection and readback",
     async (label) => {
-      await expect(evaluateMenuModelSelectionExpression("Latest", { label }))
-        .resolves.toMatchObject({ status: "option-not-found" });
-      expect(evaluateImmediateModelSelectionExpression("Latest", "6 Pro", "", "", [label]))
-        .toBeInstanceOf(Promise);
-      expect(() => assertResolvedModelSelectionForTest("Latest", label))
-        .toThrow(/requires GPT-6 Astra/);
+      await expect(
+        evaluateMenuModelSelectionExpression("Latest", { label }),
+      ).resolves.toMatchObject({ status: "option-not-found" });
+      expect(
+        evaluateImmediateModelSelectionExpression("Latest", "6 Pro", "", "", [label]),
+      ).toBeInstanceOf(Promise);
+      expect(() => assertResolvedModelSelectionForTest("Latest", label)).toThrow(
+        /requires GPT-6 Astra/,
+      );
     },
   );
 
   it.each(["6 Mini", "6 Pro Mini", "GPT-6.1 Pro", "6 Instant"])(
-    "does not infer Astra from the unknown composer label %s", (label) => {
+    "does not infer Astra from the unknown composer label %s",
+    (label) => {
       expect(evaluateImmediateModelSelectionExpression("Latest", label)).toBeInstanceOf(Promise);
     },
   );
 
-  it.each([
-    { models: [] }, { models: ["GPT-6", "GPT-5.6 Sol"] }, { models: ["GPT-6", "GPT-6"] },
-  ])("rejects missing or ambiguous checked identities $models despite a matching pill", ({ models }) => {
-    expect(evaluateImmediateModelSelectionExpression(
-      "Latest", "6 Pro", "", "", models,
-    )).toBeInstanceOf(Promise);
-  });
+  it.each([{ models: [] }, { models: ["GPT-6", "GPT-5.6 Sol"] }, { models: ["GPT-6", "GPT-6"] }])(
+    "rejects missing or ambiguous checked identities $models despite a matching pill",
+    ({ models }) => {
+      expect(
+        evaluateImmediateModelSelectionExpression("Latest", "6 Pro", "", "", models),
+      ).toBeInstanceOf(Promise);
+    },
+  );
 
   it("does not choose between two unselected compatible model radios", async () => {
-    await expect(evaluateMenuModelSelectionExpression("Latest", [
-      { label: "GPT-6" }, { label: "Latest" },
-    ])).resolves.toMatchObject({ status: "option-not-found" });
+    await expect(
+      evaluateMenuModelSelectionExpression("Latest", [{ label: "GPT-6" }, { label: "Latest" }]),
+    ).resolves.toMatchObject({ status: "option-not-found" });
   });
 
   it.each(["GPT-6", "6 Pro", "6Pro", "6 High"])(
-    "retains the observed %s label in verified explicit-selection evidence", async (label) => {
-      const runtime = { evaluate: vi.fn().mockResolvedValue({
-        result: { value: { status: "switched", label } },
-      }) };
-      await expect(ensureModelSelection(runtime as never, "Latest", vi.fn(), "select"))
-        .resolves.toMatchObject({
-          requestedModel: "Latest", resolvedLabel: label, strategy: "select", verified: true,
-        });
+    "retains the observed %s label in verified explicit-selection evidence",
+    async (label) => {
+      const runtime = {
+        evaluate: vi.fn().mockResolvedValue({
+          result: { value: { status: "switched", label } },
+        }),
+      };
+      await expect(
+        ensureModelSelection(runtime as never, "Latest", vi.fn(), "select"),
+      ).resolves.toMatchObject({
+        requestedModel: "Latest",
+        resolvedLabel: label,
+        strategy: "select",
+        verified: true,
+      });
     },
   );
 
   it.each([null, "", "GPT-6 Mini", "Instant", "GPT-5.6 Sol"])(
-    "refuses missing or wrong Astra identity %j after reported selection success", async (label) => {
-      const runtime = { evaluate: vi.fn().mockResolvedValue({
-        result: { value: { status: "switched", label } },
-      }) };
-      await expect(ensureModelSelection(runtime as never, "Latest", vi.fn(), "select"))
-        .rejects.toThrow(/requires GPT-6 Astra/);
+    "refuses missing or wrong Astra identity %j after reported selection success",
+    async (label) => {
+      const runtime = {
+        evaluate: vi.fn().mockResolvedValue({
+          result: { value: { status: "switched", label } },
+        }),
+      };
+      await expect(
+        ensureModelSelection(runtime as never, "Latest", vi.fn(), "select"),
+      ).rejects.toThrow(/requires GPT-6 Astra/);
     },
   );
 
