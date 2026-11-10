@@ -13,6 +13,7 @@ import {
   readBoundSubmittedPromptEvidence,
   readSubmittedPromptEvidence,
   readUserMessageIds,
+  type PromptAssociationFailure,
 } from "./promptFingerprint.js";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -934,6 +935,7 @@ async function runBrowserModeInternal(
   let submittedPromptConversationId: string | null = null;
   let submittedPromptObservationId: string | null = null;
   let answerRelationship: AnswerRelationship | null = null;
+  let promptAssociationFailure: PromptAssociationFailure | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -961,6 +963,7 @@ async function runBrowserModeInternal(
       submittedPromptConversationId,
       submittedPromptObservationId,
       answerRelationship,
+      promptAssociationFailure,
       ownedRecoveryTarget,
       userDataDir,
       controllerPid: process.pid,
@@ -988,6 +991,7 @@ async function runBrowserModeInternal(
     submittedPromptConversationId = null;
     submittedPromptObservationId = null;
     answerRelationship = null;
+    promptAssociationFailure = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -1283,6 +1287,7 @@ async function runBrowserModeInternal(
                 submittedPromptConversationId,
                 submittedPromptObservationId,
                 answerRelationship,
+                promptAssociationFailure,
                 ownedRecoveryTarget,
                 controllerPid: process.pid,
                 researchPlan,
@@ -1717,12 +1722,20 @@ async function runBrowserModeInternal(
             previousUserMessageIds,
             prompt,
             config.inputTimeoutMs,
+            (failure) => {
+              promptAssociationFailure = failure;
+            },
           )
         : await readSubmittedPromptEvidence(Runtime, previousUserMessageIds, config.inputTimeoutMs);
-      if (strictAnswerCapture && !observedPrompt)
+      if (strictAnswerCapture && !observedPrompt) {
+        // Persist failure-only telemetry before error handling can retire the page.
+        await emitRuntimeHint();
+        if (promptAssociationFailure)
+          logger(`Prompt association failure: ${JSON.stringify(promptAssociationFailure)}`);
         throw new Error(
           "No unique fresh user turn matching the submitted prompt; refusing unbound answer capture",
         );
+      }
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
@@ -1907,6 +1920,7 @@ async function runBrowserModeInternal(
         submittedPromptConversationId,
         submittedPromptObservationId,
         answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -2018,6 +2032,7 @@ async function runBrowserModeInternal(
               submittedPromptConversationId,
               submittedPromptObservationId,
               answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -2116,6 +2131,7 @@ async function runBrowserModeInternal(
               submittedPromptConversationId,
               submittedPromptObservationId,
               answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -2392,6 +2408,7 @@ async function runBrowserModeInternal(
             submittedPromptConversationId,
             submittedPromptObservationId,
             answerRelationship,
+            promptAssociationFailure,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
@@ -2504,6 +2521,7 @@ async function runBrowserModeInternal(
       submittedPromptConversationId,
       submittedPromptObservationId,
       answerRelationship,
+      promptAssociationFailure,
       ownedRecoveryTarget,
       controllerPid: process.pid,
     };
@@ -2543,6 +2561,7 @@ async function runBrowserModeInternal(
         submittedPromptConversationId,
         submittedPromptObservationId,
         answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
       };
@@ -2627,6 +2646,7 @@ async function runBrowserModeInternal(
           submittedPromptConversationId,
           submittedPromptObservationId,
           answerRelationship,
+          promptAssociationFailure,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -3062,6 +3082,7 @@ async function runRemoteBrowserMode(
   let submittedPromptConversationId: string | null = null;
   let submittedPromptObservationId: string | null = null;
   let answerRelationship: AnswerRelationship | null = null;
+  let promptAssociationFailure: PromptAssociationFailure | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -3091,6 +3112,7 @@ async function runRemoteBrowserMode(
           submittedPromptConversationId,
           submittedPromptObservationId,
           answerRelationship,
+          promptAssociationFailure,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -3117,6 +3139,7 @@ async function runRemoteBrowserMode(
     submittedPromptConversationId = null;
     submittedPromptObservationId = null;
     answerRelationship = null;
+    promptAssociationFailure = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -3430,12 +3453,20 @@ async function runRemoteBrowserMode(
             previousUserMessageIds,
             prompt,
             config.inputTimeoutMs,
+            (failure) => {
+              promptAssociationFailure = failure;
+            },
           )
         : await readSubmittedPromptEvidence(Runtime, previousUserMessageIds, config.inputTimeoutMs);
-      if (strictAnswerCapture && !observedPrompt)
+      if (strictAnswerCapture && !observedPrompt) {
+        // Persist failure-only telemetry before error handling can retire the page.
+        await emitRuntimeHint();
+        if (promptAssociationFailure)
+          logger(`Prompt association failure: ${JSON.stringify(promptAssociationFailure)}`);
         throw new Error(
           "No unique fresh user turn matching the submitted prompt; refusing unbound answer capture",
         );
+      }
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
@@ -3582,6 +3613,7 @@ async function runRemoteBrowserMode(
         submittedPromptConversationId,
         submittedPromptObservationId,
         answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -3690,6 +3722,7 @@ async function runRemoteBrowserMode(
               submittedPromptConversationId,
               submittedPromptObservationId,
               answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -3786,6 +3819,7 @@ async function runRemoteBrowserMode(
               submittedPromptConversationId,
               submittedPromptObservationId,
               answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -4017,6 +4051,7 @@ async function runRemoteBrowserMode(
             submittedPromptConversationId,
             submittedPromptObservationId,
             answerRelationship,
+            promptAssociationFailure,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
@@ -4124,6 +4159,7 @@ async function runRemoteBrowserMode(
       submittedPromptConversationId,
       submittedPromptObservationId,
       answerRelationship,
+      promptAssociationFailure,
       ownedRecoveryTarget,
       artifacts: savedArtifacts,
       providerNativeCapture: providerCapture.summary,
@@ -4183,6 +4219,7 @@ async function runRemoteBrowserMode(
         submittedPromptConversationId,
         submittedPromptObservationId,
         answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,

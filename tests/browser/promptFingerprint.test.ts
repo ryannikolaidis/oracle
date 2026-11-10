@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   browserPromptFingerprint,
   readBoundSubmittedPromptEvidence,
@@ -571,6 +571,7 @@ test.each([
   "strict association rejects competing fresh user nodes without polling away ambiguity: %#",
   async (...users) => {
     const page = strictDomRuntime(users);
+    const report = vi.fn();
     const evaluate = page.runtime.evaluate.bind(page.runtime);
     page.runtime.evaluate = (async (params: { expression: string }) => {
       const result = await evaluate(params);
@@ -579,8 +580,10 @@ test.each([
       return result;
     }) as typeof page.runtime.evaluate;
     expect(
-      await readBoundSubmittedPromptEvidence(page.runtime, [], "Oracle prompt A", 1000),
+      await readBoundSubmittedPromptEvidence(page.runtime, [], "Oracle prompt A", 1000, report),
     ).toBeUndefined();
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0][0]).toMatchObject({ outcome: "rejected", attempts: 1 });
     expect(page.calls).toBe(1);
     expect(page.observations).toBe(0);
   },
@@ -600,6 +603,7 @@ test("strict association rejects a single unrelated fresh turn and a missing bas
 });
 
 test("strict association still waits when no fresh user turn has mounted", async () => {
+  const report = vi.fn();
   const page = strictDomRuntime([committedUser("old prompt", "old")]);
   const evaluate = page.runtime.evaluate.bind(page.runtime);
   page.runtime.evaluate = (async (params: { expression: string }) => {
@@ -608,8 +612,239 @@ test("strict association still waits when no fresh user turn has mounted", async
     return result;
   }) as typeof page.runtime.evaluate;
   expect(
-    await readBoundSubmittedPromptEvidence(page.runtime, ["old"], "submitted prompt", 1000),
+    await readBoundSubmittedPromptEvidence(page.runtime, ["old"], "submitted prompt", 1000, report),
   ).toMatchObject({ messageId: "new", observationId: "observation" });
+  expect(report).not.toHaveBeenCalled();
   expect(page.calls).toBe(2);
   expect(page.observations).toBe(1);
+});
+
+test("association failure records unavailable baseline without evaluating the page", async () => {
+  const page = strictDomRuntime([]);
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, undefined, "private prompt", 1000, report),
+  ).toBeUndefined();
+  expect(page.calls).toBe(0);
+  expect(report).toHaveBeenCalledExactlyOnceWith({
+    version: 1,
+    outcome: "rejected",
+    reason: "baseline-unavailable",
+    attempts: 0,
+    baselineAvailable: false,
+    expectedLength: 14,
+    expectedSha256: createHash("sha256").update("private prompt").digest("hex"),
+  });
+});
+
+test.each([
+  { users: [], reason: "no-fresh-user", outcome: "timeout", raw: 0, fresh: 0, missing: 0 },
+  {
+    users: [committedUser("private prompt", "a"), committedUser("private prompt", "b")],
+    reason: "multiple-fresh-users",
+    outcome: "rejected",
+    raw: 2,
+    fresh: 2,
+    missing: 0,
+  },
+  {
+    users: [committedUser("private prompt")],
+    reason: "missing-identity",
+    outcome: "rejected",
+    raw: 1,
+    fresh: 0,
+    missing: 1,
+  },
+])(
+  "association diagnostics distinguish $reason without exposing candidate content",
+  async ({ users, reason, outcome, raw, fresh, missing }) => {
+    const page = strictDomRuntime(users);
+    const report = vi.fn();
+    expect(
+      await readBoundSubmittedPromptEvidence(page.runtime, [], "private prompt", 0, report),
+    ).toBeUndefined();
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0][0]).toMatchObject({
+      version: 1,
+      reason,
+      outcome,
+      attempts: 1,
+      baselineAvailable: true,
+      rawCandidates: raw,
+      canonicalCandidates: raw,
+      freshCandidates: fresh,
+      missingIdentities: missing,
+    });
+    expect(report.mock.calls[0][0].observedSha256).toBeUndefined();
+    expect(JSON.stringify(report.mock.calls)).not.toContain("private prompt");
+  },
+);
+
+test.each([
+  "  Hé😀\n\n\tCase\nline  ",
+  "  Hé😀\n\tCase\nline  \n",
+  "  Hé😀\n\n Case\nline  \n",
+  "  Hé😀\n\n\tCase\nline  \n".normalize("NFD"),
+])(
+  "mismatch diagnostics hash exact observed bytes without accepting them: %#",
+  async (observed) => {
+    const submitted = "  Hé😀\r\n\r\n\tCase\rline  \n";
+    const page = strictDomRuntime([committedUser(observed, "new")]);
+    const report = vi.fn();
+    expect(
+      await readBoundSubmittedPromptEvidence(page.runtime, [], submitted, 1000, report),
+    ).toBeUndefined();
+    expect(page.calls).toBe(1);
+    expect(page.observations).toBe(0);
+    expect(report).toHaveBeenCalledTimes(1);
+    const failure = report.mock.calls[0][0];
+    expect(failure).toMatchObject({
+      version: 1,
+      outcome: "rejected",
+      reason: "text-mismatch",
+      attempts: 1,
+      freshCandidates: 1,
+      bubbleCount: 1,
+      brCount: 0,
+      blockCount: 0,
+      conversationAvailable: true,
+      observationAvailable: false,
+      expectedLength: Buffer.byteLength(submitted.replace(/\r\n?/g, "\n"), "utf8"),
+      observedLength: Buffer.byteLength(observed, "utf8"),
+      observedSha256: createHash("sha256").update(observed, "utf8").digest("hex"),
+    });
+    expect(JSON.stringify(failure)).not.toContain("Case");
+    expect(failure).not.toHaveProperty("text");
+    expect(failure).not.toHaveProperty("messageId");
+  },
+);
+
+test("successful exact multiline association emits no failure telemetry", async () => {
+  const observed = "  Hé😀\n\n\tCase\nline  \n";
+  const page = strictDomRuntime([committedUser(observed, "new")]);
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(
+      page.runtime,
+      [],
+      observed.replace(/\n/g, "\r\n"),
+      0,
+      report,
+    ),
+  ).toMatchObject({
+    sha256: createHash("sha256").update(observed, "utf8").digest("hex"),
+    length: Buffer.byteLength(observed, "utf8"),
+  });
+  expect(report).not.toHaveBeenCalled();
+});
+
+test("BR and block diagnostics describe rejected shape without inventing newline semantics", async () => {
+  const user = new FakeElement(
+    "div",
+    { "data-message-author-role": "user", "data-message-id": "new" },
+    [
+      new FakeElement("div", { "data-user-message-bubble": "true" }, [
+        new FakeElement("p", {}, [new FakeElement("br")], "first"),
+        new FakeElement("p", {}, [], "second"),
+      ]),
+    ],
+  );
+  const page = strictDomRuntime([user]);
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], "first\nsecond", 0, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0][0]).toMatchObject({
+    reason: "text-mismatch",
+    bubbleCount: 1,
+    brCount: 1,
+    blockCount: 2,
+  });
+  expect(page.observations).toBe(0);
+});
+
+test("timeout reports missing continuity separately from text mismatch", async () => {
+  const runtime = {
+    evaluate: async () => ({
+      result: {
+        value: { text: "private prompt", messageId: "new", conversationId: "conversation" },
+      },
+    }),
+  } as unknown as ChromeClient["Runtime"];
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(runtime, [], "private prompt", 0, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0][0]).toMatchObject({
+    outcome: "timeout",
+    reason: "continuity-unavailable",
+    conversationAvailable: true,
+    observationAvailable: false,
+  });
+});
+
+test.each(["protocol-exception", "transport-error", "context-unavailable"])(
+  "association diagnostics exclude arbitrary exception data: %s",
+  async (scenario) => {
+    const report = vi.fn();
+    const runtime = {
+      evaluate: async () => {
+        if (scenario === "transport-error") throw new Error("private credential text");
+        if (scenario === "context-unavailable")
+          throw new Error("Execution context was destroyed: private credential text");
+        return {
+          result: { value: "private credential text" },
+          exceptionDetails: { text: "private credential text" },
+        };
+      },
+    } as unknown as ChromeClient["Runtime"];
+    expect(
+      await readBoundSubmittedPromptEvidence(runtime, [], "private prompt", 0, report),
+    ).toBeUndefined();
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0][0]).toMatchObject(
+      scenario === "context-unavailable"
+        ? { outcome: "timeout", reason: "context-unavailable", attempts: 1 }
+        : { outcome: "evaluation-error", reason: "evaluation-error", attempts: 1 },
+    );
+    expect(JSON.stringify(report.mock.calls)).not.toContain("private");
+  },
+);
+
+test("association diagnostics copy only bounded allowlisted fields", async () => {
+  const report = vi.fn();
+  const runtime = {
+    evaluate: async () => ({
+      result: {
+        value: {
+          associationRejected: true,
+          diagnostic: {
+            reason: "multiple-fresh-users",
+            rawCandidates: 1e12,
+            freshCandidates: Infinity,
+            missingIdentities: -1,
+            canonicalCandidates: 2.75,
+            brCount: "private",
+            rawDOM: "private",
+            conversationAvailable: "private",
+            exception: "private",
+          },
+        },
+      },
+    }),
+  } as unknown as ChromeClient["Runtime"];
+  expect(
+    await readBoundSubmittedPromptEvidence(runtime, [], "private prompt", 1000, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0][0]).toEqual({
+    version: 1,
+    outcome: "rejected",
+    reason: "multiple-fresh-users",
+    attempts: 1,
+    baselineAvailable: true,
+    rawCandidates: 1_000_000,
+    canonicalCandidates: 2,
+    expectedLength: 14,
+    expectedSha256: createHash("sha256").update("private prompt").digest("hex"),
+  });
 });

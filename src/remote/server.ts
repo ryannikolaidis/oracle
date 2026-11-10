@@ -1121,6 +1121,7 @@ function sanitizeResult(
     submittedPromptMessageId: result.submittedPromptMessageId,
     submittedPromptConversationId: result.submittedPromptConversationId,
     submittedPromptObservationId: result.submittedPromptObservationId,
+    promptAssociationFailure: result.promptAssociationFailure,
     answerRelationship: result.answerRelationship,
     warnings: warnings.length > 0 ? warnings : undefined,
     chromePid: undefined,

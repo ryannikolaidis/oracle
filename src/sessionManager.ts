@@ -119,6 +119,10 @@ export interface BrowserRuntimeMetadata {
   conversationId?: string;
   /** True after Oracle has submitted the prompt to ChatGPT. */
   promptSubmitted?: boolean;
+  /** Failure-only association diagnostics; never successful submission evidence. */
+  promptAssociationFailure?:
+    | import("./browser/promptFingerprint.js").PromptAssociationFailure
+    | null;
   /** Fingerprint of committed user text and stable message ID; null until commitment is confirmed. */
   submittedPromptHash?: string | null;
   /** SHA-256 hex of observed user-turn text: CRLF/lone CR to LF, UTF-8, no other normalization. */
@@ -761,6 +765,7 @@ export async function initializeSession(
         ? {
             ...(browserConfig ? { config: browserConfig } : {}),
             runtime: {
+              promptAssociationFailure: null,
               submittedPromptHash: null,
               submittedPromptSha256: null,
               submittedPromptLength: null,

@@ -104,6 +104,7 @@ export async function performSessionRun({
         ...(mode === "browser" && sessionMeta.browser?.runtime?.submittedPromptHash !== undefined
           ? {
               runtime: {
+                promptAssociationFailure: null,
                 submittedPromptHash: null,
                 submittedPromptSha256: null,
                 submittedPromptLength: null,

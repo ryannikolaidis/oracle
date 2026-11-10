@@ -234,6 +234,8 @@ export interface BrowserRunResult {
   tabUrl?: string;
   conversationId?: string;
   promptSubmitted?: boolean;
+  /** Failure-only association diagnostics; never successful submission evidence. */
+  promptAssociationFailure?: import("./promptFingerprint.js").PromptAssociationFailure | null;
   submittedPromptHash?: string | null;
   /** SHA-256 hex of observed user-turn text: CRLF/lone CR to LF, UTF-8, no other normalization. */
   submittedPromptSha256?: string | null;
