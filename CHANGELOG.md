@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Browser: persist a SHA-256 digest, UTF-8 byte length and message identity from the observed submitted user turn, alongside the existing identity-bound fingerprint. Missing fresh DOM evidence leaves these fields null.
+- Browser: persist a SHA-256 digest, UTF-8 byte length and message identity from the observed submitted user turn, alongside the existing identity-bound fingerprint. Bind answer capture and recovery to the same observed conversation and unchanged user turn, retain assistant relationship and output digests, and refuse edited, intervening, ambiguous or unobservable relationships. Continuity lost on reload, legacy sessions without observed identity, Deep Research iframe output, follow-up transcripts and session tab harvest require a fresh supported capture.
 
 ## 0.21.4 - 2026-10-01
 

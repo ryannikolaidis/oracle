@@ -81,6 +81,9 @@ async function harvestSessionPrompt(
   options: Parameters<typeof harvestChatGptTab>[0],
   requireSessionPrompt = true,
 ): Promise<ChatGptTabSummary> {
+  if (meta.browser?.runtime?.submittedPromptSha256 !== undefined) {
+    throw new Error("Tab harvest cannot verify the session answer relationship; use session reattach for an identity-bound capture, or inspect a tab without accepting it as session output");
+  }
   const fingerprint = requireSessionPrompt ? meta.browser?.runtime?.submittedPromptHash : undefined;
   if (fingerprint === null) {
     throw new Error(

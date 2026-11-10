@@ -1,3 +1,4 @@
+import { evaluateBoundAnswer, hasAnswerBinding, requireAnswerBinding, recordBoundAnswer, recheckBoundAnswer } from "../answerBinding.js";
 import type { ChromeClient, BrowserLogger } from "../types.js";
 import {
   ACTION_BAR_COPY_BUTTON_SELECTOR,
@@ -290,7 +291,7 @@ export async function waitForAssistantResponse(
     minTurnIndex,
     expectedConversationId,
   );
-  const evaluationPromise = Runtime.evaluate({
+  const evaluationPromise = evaluateBoundAnswer(Runtime, {
     expression,
     awaitPromise: true,
     returnByValue: true,
@@ -460,7 +461,7 @@ export async function readAssistantSnapshot(
   minTurnIndex?: number,
   expectedConversationId?: string,
 ): Promise<AssistantSnapshot | null> {
-  const { result } = await Runtime.evaluate({
+  const { result } = await evaluateBoundAnswer(Runtime, {
     expression: buildAssistantSnapshotExpression(minTurnIndex, expectedConversationId),
     returnByValue: true,
   });
@@ -486,11 +487,11 @@ export async function captureAssistantMarkdown(
   meta: { messageId?: string | null; turnId?: string | null },
   logger: BrowserLogger,
 ): Promise<string | null> {
-  const { result } = await Runtime.evaluate({
-    expression: buildCopyExpression(meta),
+  const { result } = await evaluateBoundAnswer(Runtime, {
+    expression: buildCopyExpression(meta, hasAnswerBinding(Runtime)),
     returnByValue: true,
     awaitPromise: true,
-  });
+  }, meta.messageId ?? null);
   if (result?.value?.success && typeof result.value.markdown === "string") {
     return result.value.fileCard
       ? result.value.markdown.replace(/:chatgpt-content-reference\{index="\d+"\}/g, "")
@@ -1619,14 +1620,30 @@ function buildMarkdownFallbackExtractor(minTurnLiteral?: string): string {
   })`;
 }
 
-function buildCopyExpression(meta: { messageId?: string | null; turnId?: string | null }): string {
+function buildCopyExpression(meta: { messageId?: string | null; turnId?: string | null }, strictIdentity = false): string {
   return `(() => {
     ${buildClickDispatcher()}
     const BUTTON_SELECTOR = '${COPY_BUTTON_SELECTOR}';
     const TIMEOUT_MS = 10000;
+    ${buildTurnActionLocatorJs('findBoundAction')}
+    const findBoundTurnAction = turn => findBoundAction(turn, BUTTON_SELECTOR, ${JSON.stringify(ACTION_BAR_COPY_BUTTON_SELECTOR)});
 
     const locateButton = () => {
       const hint = ${JSON.stringify(meta ?? {})};
+      if (${strictIdentity}) {
+        if (!hint.messageId) return null;
+        const identity = node => node.getAttribute('data-message-id') || node.getAttribute('data-chatgpt-selection-message-id') || node.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute('data-content-search-unit-key') || node.getAttribute('data-chatgpt-search-unit-key');
+        const messages = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_ROLE_SELECTOR)}));
+        const matches = messages.filter(node => identity(node) === hint.messageId);
+        if (matches.length !== 1) return null;
+        const message = matches[0];
+        const turn = message.closest(${JSON.stringify(CONVERSATION_TURN_SELECTOR)}) || message;
+        // A turn-wide action is usable only when it belongs to this sole assistant.
+        if (messages.some(node => node !== message && turn.contains(node))) return null;
+        return Array.from(message.querySelectorAll(BUTTON_SELECTOR)).at(-1) ||
+          findBoundTurnAction(turn);
+      }
+
       if (hint?.messageId) {
         const node = Array.from(document.querySelectorAll('[data-message-id], [data-content-search-unit-key], [data-chatgpt-search-message-ids]')).find(node => (node.getAttribute('data-message-id') || node.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute('data-content-search-unit-key')) === hint.messageId)?.closest('[data-turn-key]') || Array.from(document.querySelectorAll('[data-message-id]')).find(node => node.getAttribute('data-message-id') === hint.messageId);
         const buttons = node ? Array.from(node.querySelectorAll('${COPY_BUTTON_SELECTOR}')) : [];
@@ -1860,4 +1877,23 @@ function cleanAssistantText(text: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** Discard recovery candidates in favor of a fresh, identity-bound final capture. */
+export async function finalizeBoundAssistantAnswer(Runtime: ChromeClient["Runtime"], logger: BrowserLogger) {
+  requireAnswerBinding(Runtime);
+  const snapshot = await readAssistantSnapshot(Runtime);
+  if (!snapshot?.text || !snapshot.messageId) throw new Error("No identifiable assistant answer for observed user turn");
+  const markdown = await captureAssistantMarkdown(Runtime, snapshot, logger);
+  const text = cleanAssistantText(snapshot.text);
+  const answerMarkdown = markdown ?? text;
+  recordBoundAnswer(Runtime, snapshot, text, answerMarkdown);
+  const fresh = await readAssistantSnapshot(Runtime);
+  const answerRelationship = recheckBoundAnswer(Runtime, fresh, text, answerMarkdown);
+  return { text, markdown: answerMarkdown, html: snapshot.html ?? "", messageId: snapshot.messageId, answerRelationship };
+}
+
+export async function verifyBoundAssistantReturn(Runtime: ChromeClient["Runtime"], text: string, markdown: string) {
+  requireAnswerBinding(Runtime);
+  return recheckBoundAnswer(Runtime, await readAssistantSnapshot(Runtime), text, markdown);
 }

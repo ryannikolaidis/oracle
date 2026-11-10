@@ -126,6 +126,12 @@ export interface BrowserRuntimeMetadata {
   submittedPromptLength?: number | null;
   /** Stable DOM identity of the same freshly selected user turn; null without fresh evidence. */
   submittedPromptMessageId?: string | null;
+  /** Conversation observed atomically with the submitted user turn. */
+  submittedPromptConversationId?: string | null;
+  /** Live DOM observation token; navigation loses continuity and requires a fresh run. */
+  submittedPromptObservationId?: string | null;
+  /** Verified DOM relationship and hashes of the exact returned output. */
+  answerRelationship?: import("./browser/answerBinding.js").AnswerRelationship | null;
   /** Latest Deep Research plan captured from ChatGPT's out-of-process iframe. */
   researchPlan?: BrowserResearchPlanMetadata;
   /** PID of the controller process that launched this browser run. Helps detect orphaned sessions. */
@@ -758,6 +764,9 @@ export async function initializeSession(
               submittedPromptSha256: null,
               submittedPromptLength: null,
               submittedPromptMessageId: null,
+              submittedPromptConversationId: null,
+              submittedPromptObservationId: null,
+              answerRelationship: null,
             },
           }
         : browserConfig

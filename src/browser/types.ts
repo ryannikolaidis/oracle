@@ -239,6 +239,12 @@ export interface BrowserRunResult {
   submittedPromptLength?: number | null;
   /** Stable DOM identity of the same freshly selected user turn; null without fresh evidence. */
   submittedPromptMessageId?: string | null;
+  /** Conversation observed atomically with the submitted user turn. */
+  submittedPromptConversationId?: string | null;
+  /** Live DOM observation token; navigation loses continuity and requires a fresh run. */
+  submittedPromptObservationId?: string | null;
+  /** Verified DOM relationship and hashes of the exact returned output. */
+  answerRelationship?: import("./answerBinding.js").AnswerRelationship | null;
   researchPlan?: BrowserResearchPlanMetadata;
   controllerPid?: number;
 }

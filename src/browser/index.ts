@@ -1,3 +1,5 @@
+import { bindSubmittedAnswer, requireAnswerBinding, type AnswerRelationship } from "./answerBinding.js";
+import { finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "./actions/assistantResponse.js";
 import { readSubmittedPromptEvidence, readUserMessageIds } from "./promptFingerprint.js";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -866,6 +868,9 @@ async function runBrowserModeInternal(
   const fallbackSubmission = options.fallbackSubmission;
 
   let config = resolveBrowserConfig(options.config);
+  if (config.researchMode === "deep" || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
+    throw new Error("Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts");
+  }
   const usingCopiedProfile = Boolean(config.copyProfileSource);
   if (usingCopiedProfile && (config.attachRunning || config.remoteChrome)) {
     throw new BrowserAutomationError(
@@ -899,6 +904,9 @@ async function runBrowserModeInternal(
   let submittedPromptSha256: string | null = null;
   let submittedPromptLength: number | null = null;
   let submittedPromptMessageId: string | null = null;
+  let submittedPromptConversationId: string | null = null;
+  let submittedPromptObservationId: string | null = null;
+  let answerRelationship: AnswerRelationship | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -923,6 +931,9 @@ async function runBrowserModeInternal(
       submittedPromptSha256,
       submittedPromptLength,
       submittedPromptMessageId,
+      submittedPromptConversationId,
+      submittedPromptObservationId,
+      answerRelationship,
       ownedRecoveryTarget,
       userDataDir,
       controllerPid: process.pid,
@@ -947,6 +958,9 @@ async function runBrowserModeInternal(
     submittedPromptSha256 = null;
     submittedPromptLength = null;
     submittedPromptMessageId = null;
+    submittedPromptConversationId = null;
+    submittedPromptObservationId = null;
+    answerRelationship = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -1239,6 +1253,9 @@ async function runBrowserModeInternal(
                 submittedPromptSha256,
                 submittedPromptLength,
                 submittedPromptMessageId,
+                submittedPromptConversationId,
+                submittedPromptObservationId,
+                answerRelationship,
                 ownedRecoveryTarget,
                 controllerPid: process.pid,
                 researchPlan,
@@ -1672,11 +1689,15 @@ async function runBrowserModeInternal(
         previousUserMessageIds,
         config.inputTimeoutMs,
       );
+      if (!observedPrompt) throw new Error("No fresh observed user turn; refusing unbound answer capture");
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
         submittedPromptLength = observedPrompt.length;
         submittedPromptMessageId = observedPrompt.messageId;
+        submittedPromptConversationId = observedPrompt.conversationId ?? null;
+        submittedPromptObservationId = observedPrompt.observationId ?? null;
+        bindSubmittedAnswer(Runtime, observedPrompt);
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -1849,6 +1870,9 @@ async function runBrowserModeInternal(
         submittedPromptSha256,
         submittedPromptLength,
         submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -1957,6 +1981,9 @@ async function runBrowserModeInternal(
               submittedPromptSha256,
               submittedPromptLength,
               submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -1997,6 +2024,7 @@ async function runBrowserModeInternal(
       turnPrompt: string,
       label: string,
     ): Promise<BrowserConversationTurn & { answerHtml: string }> => {
+      requireAnswerBinding(Runtime);
       let turnAnswer: AssistantAnswer;
       try {
         await updateConversationHint("assistant-wait", 15_000).catch(() => false);
@@ -2051,6 +2079,9 @@ async function runBrowserModeInternal(
               submittedPromptSha256,
               submittedPromptLength,
               submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -2089,7 +2120,6 @@ async function runBrowserModeInternal(
         }
       }
       let turnAnswerText = turnAnswer.text;
-      const turnAnswerHtml = turnAnswer.html ?? "";
       const copiedMarkdown = await raceWithDisconnect(
         withRetries(
           async () => {
@@ -2225,12 +2255,14 @@ async function runBrowserModeInternal(
           turnAnswerMarkdown = bestText;
         }
       }
-      answerMessageId = turnAnswer.meta.messageId ?? undefined;
+      const bound = await finalizeBoundAssistantAnswer(Runtime, logger);
+      answerRelationship = bound.answerRelationship;
+      answerMessageId = bound.messageId;
       return {
         label,
-        answerText: turnAnswerText,
-        answerMarkdown: turnAnswerMarkdown,
-        answerHtml: turnAnswerHtml,
+        answerText: bound.text,
+        answerMarkdown: bound.markdown,
+        answerHtml: bound.html,
       };
     };
 
@@ -2314,6 +2346,9 @@ async function runBrowserModeInternal(
             submittedPromptSha256,
             submittedPromptLength,
             submittedPromptMessageId,
+            submittedPromptConversationId,
+            submittedPromptObservationId,
+            answerRelationship,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
@@ -2362,6 +2397,7 @@ async function runBrowserModeInternal(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -2373,6 +2409,7 @@ async function runBrowserModeInternal(
         imageArtifacts.savedImages.length === imageArtifacts.imageCount &&
         fileArtifacts.savedFiles.length === fileArtifacts.fileCount,
     });
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
     runStatus = "complete";
     const durationMs = Date.now() - startedAt;
     const answerChars = answerText.length;
@@ -2405,6 +2442,9 @@ async function runBrowserModeInternal(
       submittedPromptSha256,
       submittedPromptLength,
       submittedPromptMessageId,
+      submittedPromptConversationId,
+      submittedPromptObservationId,
+      answerRelationship,
       ownedRecoveryTarget,
       controllerPid: process.pid,
     };
@@ -2441,6 +2481,9 @@ async function runBrowserModeInternal(
         submittedPromptSha256,
         submittedPromptLength,
         submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
         ownedRecoveryTarget,
         controllerPid: process.pid,
       };
@@ -2522,6 +2565,9 @@ async function runBrowserModeInternal(
           submittedPromptSha256,
           submittedPromptLength,
           submittedPromptMessageId,
+          submittedPromptConversationId,
+          submittedPromptObservationId,
+          answerRelationship,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -2925,6 +2971,9 @@ async function runRemoteBrowserMode(
   options: BrowserRunOptions,
   cancellation: BrowserCancellation,
 ): Promise<BrowserRunResult> {
+  if (config.researchMode === "deep" || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
+    throw new Error("Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts");
+  }
   const remoteChromeConfig = config.remoteChrome;
   if (!remoteChromeConfig) {
     throw new Error(
@@ -2943,6 +2992,9 @@ async function runRemoteBrowserMode(
   let submittedPromptSha256: string | null = null;
   let submittedPromptLength: number | null = null;
   let submittedPromptMessageId: string | null = null;
+  let submittedPromptConversationId: string | null = null;
+  let submittedPromptObservationId: string | null = null;
+  let answerRelationship: AnswerRelationship | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -2969,6 +3021,9 @@ async function runRemoteBrowserMode(
           submittedPromptSha256,
           submittedPromptLength,
           submittedPromptMessageId,
+          submittedPromptConversationId,
+          submittedPromptObservationId,
+          answerRelationship,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -2992,6 +3047,9 @@ async function runRemoteBrowserMode(
     submittedPromptSha256 = null;
     submittedPromptLength = null;
     submittedPromptMessageId = null;
+    submittedPromptConversationId = null;
+    submittedPromptObservationId = null;
+    answerRelationship = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -3304,11 +3362,15 @@ async function runRemoteBrowserMode(
         previousUserMessageIds,
         config.inputTimeoutMs,
       );
+      if (!observedPrompt) throw new Error("No fresh observed user turn; refusing unbound answer capture");
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
         submittedPromptLength = observedPrompt.length;
         submittedPromptMessageId = observedPrompt.messageId;
+        submittedPromptConversationId = observedPrompt.conversationId ?? null;
+        submittedPromptObservationId = observedPrompt.observationId ?? null;
+        bindSubmittedAnswer(Runtime, observedPrompt);
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -3443,6 +3505,9 @@ async function runRemoteBrowserMode(
         submittedPromptSha256,
         submittedPromptLength,
         submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -3548,6 +3613,9 @@ async function runRemoteBrowserMode(
               submittedPromptSha256,
               submittedPromptLength,
               submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -3587,6 +3655,7 @@ async function runRemoteBrowserMode(
       turnPrompt: string,
       label: string,
     ): Promise<BrowserConversationTurn & { answerHtml: string }> => {
+      requireAnswerBinding(Runtime);
       let turnAnswer: AssistantAnswer;
       try {
         await activeConversationUrlMonitor.update("assistant-wait", 15_000).catch(() => false);
@@ -3640,6 +3709,9 @@ async function runRemoteBrowserMode(
               submittedPromptSha256,
               submittedPromptLength,
               submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -3677,7 +3749,6 @@ async function runRemoteBrowserMode(
         }
       }
       let turnAnswerText = turnAnswer.text;
-      const turnAnswerHtml = turnAnswer.html ?? "";
 
       const copiedMarkdown = await withRetries(
         async () => {
@@ -3777,12 +3848,14 @@ async function runRemoteBrowserMode(
           turnAnswerMarkdown = bestText;
         }
       }
-      answerMessageId = turnAnswer.meta.messageId ?? undefined;
+      const bound = await finalizeBoundAssistantAnswer(Runtime, logger);
+      answerRelationship = bound.answerRelationship;
+      answerMessageId = bound.messageId;
       return {
         label,
-        answerText: turnAnswerText,
-        answerMarkdown: turnAnswerMarkdown,
-        answerHtml: turnAnswerHtml,
+        answerText: bound.text,
+        answerMarkdown: bound.markdown,
+        answerHtml: bound.html,
       };
     };
 
@@ -3858,6 +3931,9 @@ async function runRemoteBrowserMode(
             submittedPromptSha256,
             submittedPromptLength,
             submittedPromptMessageId,
+            submittedPromptConversationId,
+            submittedPromptObservationId,
+            answerRelationship,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
@@ -3906,6 +3982,7 @@ async function runRemoteBrowserMode(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -3921,6 +3998,7 @@ async function runRemoteBrowserMode(
     const answerChars = answerText.length;
     const answerTokens = estimateTokenCount(answerMarkdown);
 
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
     runStatus = "complete";
     return {
       answerText,
@@ -3944,6 +4022,9 @@ async function runRemoteBrowserMode(
       submittedPromptSha256,
       submittedPromptLength,
       submittedPromptMessageId,
+      submittedPromptConversationId,
+      submittedPromptObservationId,
+      answerRelationship,
       ownedRecoveryTarget,
       artifacts: savedArtifacts,
       providerNativeCapture: providerCapture.summary,
@@ -4000,6 +4081,9 @@ async function runRemoteBrowserMode(
         submittedPromptSha256,
         submittedPromptLength,
         submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,

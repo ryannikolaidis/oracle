@@ -1,6 +1,7 @@
+import { buildPromptObservationExpression } from "./promptObservation.js";
 import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
-import { buildConversationTurnListExpression } from "./conversationTurns.js";
+import { buildConversationTurnListExpression, buildUserMessageIdExpression } from "./conversationTurns.js";
 
 export function browserPromptFingerprint(value: unknown, messageId: string): string {
   return createHash("sha256")
@@ -29,6 +30,8 @@ export interface SubmittedPromptEvidence {
   /** UTF-8 byte length after CRLF and lone CR are converted to LF. */
   length: number;
   messageId: string;
+  conversationId?: string;
+  observationId?: string;
 }
 
 // Preserve the existing fingerprint-only interface for callers such as tab harvest.
@@ -55,13 +58,22 @@ export async function readSubmittedPromptEvidence(
         for (let index = turns.length - 1; index >= 0; index--) {
           const turn = turns[index];
           const user = turn.matches(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])') ? turn : turn.querySelector(':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])');
-          if (user) return { text: (user.querySelector('[data-user-message-bubble="true"]') || user).textContent, messageId: user.getAttribute('data-message-id') || user.getAttribute('data-chatgpt-selection-message-id') || user.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || user.closest('[data-turn-key]')?.getAttribute('data-turn-key') || (user.getAttribute('data-content-search-unit-key') || user.getAttribute('data-chatgpt-search-unit-key')) };
+          if (user) {
+            const messageId = ${buildUserMessageIdExpression()};
+            if (${JSON.stringify([...previous])}.includes(messageId)) return null;
+            return {
+              observationId: typeof location === 'object' ? ${buildPromptObservationExpression()} : undefined,
+              conversationId: typeof location === 'object' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
+              text: (user.querySelector('[data-user-message-bubble="true"]') || user).textContent,
+              messageId,
+            };
+          }
         }
         return null;
       })()`,
     timeoutMs,
     (value) => {
-      const turn = value as { text?: unknown; messageId?: unknown } | null;
+      const turn = value as { text?: unknown; messageId?: unknown; conversationId?: unknown; observationId?: unknown } | null;
       if (
         typeof turn?.text === "string" &&
         turn.text.trim() &&
@@ -77,6 +89,8 @@ export async function readSubmittedPromptEvidence(
           sha256: createHash("sha256").update(text, "utf8").digest("hex"),
           length: Buffer.byteLength(text, "utf8"),
           messageId: turn.messageId,
+          ...(typeof turn.observationId === "string" ? { observationId: turn.observationId } : {}),
+          ...(typeof turn.conversationId === "string" ? { conversationId: turn.conversationId } : {}),
         };
       }
       return undefined;

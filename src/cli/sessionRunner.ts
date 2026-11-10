@@ -108,6 +108,9 @@ export async function performSessionRun({
                 submittedPromptSha256: null,
                 submittedPromptLength: null,
                 submittedPromptMessageId: null,
+                submittedPromptConversationId: null,
+                submittedPromptObservationId: null,
+                answerRelationship: null,
               },
             }
           : {}),
@@ -1500,7 +1503,7 @@ async function autoReattachUntilComplete({
         browser: {
           ...browserMetadata,
           config: browserConfig,
-          runtime,
+          runtime: { ...runtime, answerRelationship: result.answerRelationship },
         },
         artifacts: mergeArtifacts(sessionMeta.artifacts, artifacts),
         response: { status: "completed" },

@@ -1,0 +1,216 @@
+import { readAssistantSnapshot, captureAssistantMarkdown, finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "../../src/browser/actions/assistantResponse.js";
+import { expect, test } from "vitest";
+import type { ChromeClient } from "../../src/browser/types.js";
+import {
+  answerDigest,
+  bindSubmittedAnswer,
+  evaluateBoundAnswer,
+  recordBoundAnswer,
+  recheckBoundAnswer,
+  restoreAnswerBinding,
+} from "../../src/browser/answerBinding.js";
+import { browserPromptFingerprint, readSubmittedPromptEvidence } from "../../src/browser/promptFingerprint.js";
+import { buildPromptObservationExpression } from "../../src/browser/promptObservation.js";
+import { FakeDocument, FakeElement } from "./domFixture.js";
+
+const prompt = "  Hé😀\r\n\tReview this exact source  ";
+const normalized = prompt.replace(/\r\n?/g, "\n");
+const receipt = {
+  fingerprint: browserPromptFingerprint(prompt, "user-original"),
+  sha256: answerDigest(normalized),
+  length: Buffer.byteLength(normalized, "utf8"),
+  messageId: "user-original",
+  conversationId: "conversation-original",
+  observationId: "observation-original",
+};
+const assistant = (id = "answer-original") => new FakeElement("div", {
+  "data-message-author-role": "assistant", "data-message-id": id,
+}, [], "The bound answer");
+const user = (text = prompt, id = "user-original") => new FakeElement("div", {
+  "data-message-author-role": "user", "data-message-id": id,
+}, [new FakeElement("div", { "data-user-message-bubble": "true" }, [], text)]);
+
+function page(initial: FakeElement[] = [user(), assistant()]) {
+  const document = new FakeDocument(initial);
+  const location = { href: "https://chatgpt.com/c/conversation-original" };
+  const observation = { invalidated: false, conversationId: receipt.conversationId };
+  const registry = new Map([[receipt.observationId, observation]]);
+  const global = { __oraclePromptObservations: registry };
+  let during: (() => void) | undefined;
+  const runtime = {
+    evaluate: async ({ expression }: { expression: string }) => ({
+      result: { value: await new Function("document", "location", "globalThis", "during", `return ${expression}`)(document, location, global, () => during?.()) },
+    }),
+  } as unknown as ChromeClient["Runtime"];
+  bindSubmittedAnswer(runtime, receipt);
+  return { runtime, document, location, observation, registry, setDuring: (fn: () => void) => { during = fn; } };
+}
+const selection = { expression: '({ text: "The bound answer", messageId: "answer-original" })', returnByValue: true };
+
+test("accepts only the observed user and the identified following assistant, preserving UTF-8 normalization", async () => {
+  const { runtime } = page();
+  const result = await evaluateBoundAnswer(runtime, selection);
+  expect(result.result.value).toEqual({ text: "The bound answer", messageId: "answer-original" });
+});
+
+test("allows an observer to start before the assistant mounts", async () => {
+  const p = page([user()]);
+  p.setDuring(() => p.document.body.append(assistant()));
+  expect((await evaluateBoundAnswer(p.runtime, {
+    expression: '(async () => { during(); return { text: "The bound answer", messageId: "answer-original" }; })()',
+  })).result.value.messageId).toBe("answer-original");
+});
+
+test.each([
+  ["edited user", () => [user("edited instruction"), assistant()]],
+  ["same text with replaced identity", () => [user(prompt, "replacement"), assistant()]],
+  ["missing user", () => [assistant()]],
+  ["intervening user and answer", () => [user(), assistant(), user("revise the review", "intervening"), assistant("later-answer")]],
+  ["intervening unanswered user", () => [user(), assistant(), user("new instruction", "intervening")]],
+  ["duplicate user identity", () => [user(), user(), assistant()]],
+  ["ambiguous assistant siblings", () => [user(), assistant(), assistant("other-answer")]],
+])("rejects %s even when a candidate answer retains the requested schema", async (_label, nodes) => {
+  const p = page((nodes as () => FakeElement[])());
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/binding rejected/);
+});
+
+test.each(["https://chatgpt.com/c/different", "https://chatgpt.com/"])("rejects missing or changed conversation %s", async href => {
+  const p = page();
+  p.location.href = href;
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/binding rejected/);
+});
+
+test("rejects selection of an old assistant even if its text is identical", async () => {
+  const p = page([assistant("old-answer"), user(), assistant()]);
+  await expect(evaluateBoundAnswer(p.runtime, { expression: '({ text: "The bound answer", messageId: "old-answer" })' })).rejects.toThrow(/unrelated assistant/);
+});
+
+test("rejects identity-free layout fallback and an unrelated copy target", async () => {
+  const p = page();
+  await expect(evaluateBoundAnswer(p.runtime, { expression: '({ text: "plausible answer" })' })).rejects.toThrow();
+  const q = page();
+  await expect(evaluateBoundAnswer(q.runtime, { expression: '({ success: true, markdown: "copied" })' }, "unrelated")).rejects.toThrow();
+});
+
+test("rejects a plain string recovery result without assistant identity", async () => {
+  const p = page();
+  await expect(evaluateBoundAnswer(p.runtime, { expression: '"plausible answer without provenance"' })).rejects.toThrow(/binding rejected/);
+});
+
+test("rechecks user text after asynchronous selection and permanently refuses swallowed failures", async () => {
+  const p = page();
+  p.setDuring(() => { p.observation.invalidated = true; });
+  await expect(evaluateBoundAnswer(p.runtime, { expression: '(async () => { during(); return { text: "answer", messageId: "answer-original" }; })()' })).rejects.toThrow(/observation lost or invalidated/);
+  p.observation.invalidated = false;
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/invalidated/);
+});
+
+test("refuses lost observation on reload instead of minting new continuity during recovery", async () => {
+  const p = page();
+  p.registry.clear();
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/observation lost or invalidated/);
+  expect(() => restoreAnswerBinding(p.runtime, { submittedPromptHash: receipt.fingerprint })).toThrow(/no verifiable/);
+});
+
+test("persists exact output hashes and rejects a changed final answer or assistant", () => {
+  const p = page();
+  const snapshot = { messageId: "answer-original", text: "answer", html: "<p>answer</p>" };
+  const evidence = recordBoundAnswer(p.runtime, snapshot, "answer", "**answer**");
+  expect(evidence).toMatchObject({
+    version: 1, relationship: "sole-assistant-after-user", userMessageId: receipt.messageId,
+    conversationId: receipt.conversationId, userSha256: receipt.sha256, userLength: receipt.length,
+    assistantMessageId: "answer-original", answerTextSha256: answerDigest("answer"),
+    answerMarkdownSha256: answerDigest("**answer**"),
+  });
+  expect(recheckBoundAnswer(p.runtime, snapshot, "answer", "**answer**")).toEqual(evidence);
+  for (const changed of [{ ...snapshot, text: "later answer" }, { ...snapshot, messageId: "later" }, null]) {
+    expect(() => recheckBoundAnswer(p.runtime, changed, "answer", "**answer**")).toThrow(/changed/);
+  }
+  expect(() => recheckBoundAnswer(p.runtime, snapshot, "answer", "later markdown")).toThrow(/changed/);
+});
+
+test("non-session DOM snapshot utilities keep their old interface without producing relationship evidence", async () => {
+  const runtime = { evaluate: async () => ({ result: { value: "legacy candidate" } }) } as unknown as ChromeClient["Runtime"];
+  expect((await evaluateBoundAnswer(runtime, { expression: "1" })).result.value).toBe("legacy candidate");
+  expect(() => recordBoundAnswer(runtime, { messageId: "id" }, "text", "text")).toThrow(/Cannot establish/);
+});
+
+test("installs continuity observation atomically with the observed prompt read", async () => {
+  const document = new FakeDocument([user()]);
+  const registry: Record<string, unknown> = {};
+  const observers: Array<(records: unknown[]) => void> = [];
+  class Observer {
+    constructor(callback: (records: unknown[]) => void) { observers.push(callback); }
+    observe() {}
+    disconnect() {}
+  }
+  const runtime = {
+    evaluate: async ({ expression }: { expression: string }) => ({ result: { value: new Function("document", "location", "globalThis", "MutationObserver", "crypto", `return ${expression}`)(document, { href: "https://chatgpt.com/c/conversation-original" }, registry, Observer, { randomUUID: () => "observation-original" }) } }),
+  } as unknown as ChromeClient["Runtime"];
+  expect(await readSubmittedPromptEvidence(runtime, [])).toMatchObject(receipt);
+  expect(observers).toHaveLength(1);
+});
+
+test.each(["edit", "remove", "intervening"])("latches %s even if the DOM is subsequently restored", mode => {
+  const observed = user();
+  const document = new FakeDocument([observed]);
+  const registry: { __oraclePromptObservations?: Map<string, { invalidated: boolean }> } = {};
+  let callback: (records: unknown[]) => void = () => {};
+  class Observer {
+    constructor(fn: typeof callback) { callback = fn; }
+    observe() {}
+    disconnect() {}
+  }
+  const expression = buildPromptObservationExpression("observed");
+  new Function("document", "location", "globalThis", "MutationObserver", "crypto", "observed", `return ${expression}`)(document, { href: "https://chatgpt.com/c/conversation-original" }, registry, Observer, { randomUUID: () => "token" }, observed);
+  const bubble = observed.querySelector('[data-user-message-bubble="true"]')!;
+  callback([{
+    target: mode === "edit" ? bubble : document.body,
+    type: "childList",
+    addedNodes: mode === "intervening" ? [user("revision", "later")] : [],
+    removedNodes: mode === "remove" ? [observed] : [],
+  }]);
+  expect(registry.__oraclePromptObservations?.get("token")?.invalidated).toBe(true);
+});
+
+function protocolRuntime(candidate: unknown, changedAfter = false) {
+  const read = {
+    conversationId: receipt.conversationId, userMessageId: receipt.messageId,
+    userIds: [receipt.messageId], userText: prompt,
+    assistantIds: ["answer-original"], roles: ["assistant"],
+  };
+  const runtime = { evaluate: async () => ({ result: { type: "object", value: {
+    before: read, after: changedAfter ? { ...read, userText: "edited during capture" } : read,
+    observationValid: true, value: candidate,
+  } } }) } as unknown as ChromeClient["Runtime"];
+  bindSubmittedAnswer(runtime, receipt);
+  return runtime;
+}
+
+test("snapshot and copy public surfaces enforce binding even without a conversation/index argument", async () => {
+  await expect(readAssistantSnapshot(protocolRuntime({ text: "later", messageId: "later" }))).rejects.toThrow(/unrelated assistant/);
+  await expect(captureAssistantMarkdown(protocolRuntime({ success: true, markdown: "later" }, true), { messageId: "answer-original" }, () => {})).rejects.toThrow(/binding rejected/);
+});
+
+test("final capture and successful-return gate reject post-capture edits rather than a longer recovery candidate", async () => {
+  const snapshot = { text: "Bound final answer", html: "<p>Bound final answer</p>", messageId: "answer-original" };
+  let changed = false;
+  const read = {
+    conversationId: receipt.conversationId, userMessageId: receipt.messageId,
+    userIds: [receipt.messageId], userText: prompt,
+    assistantIds: ["answer-original"], roles: ["assistant"],
+  };
+  const runtime = { evaluate: async ({ expression }: { expression: string }) => ({ result: { type: "object", value: {
+    before: read, after: read, observationValid: true,
+    value: expression.includes('const BUTTON_SELECTOR')
+      ? { success: true, markdown: "**Bound final answer**" }
+      : changed ? { ...snapshot, text: "Different answer" } : snapshot,
+  } } }) } as unknown as ChromeClient["Runtime"];
+  bindSubmittedAnswer(runtime, receipt);
+  const result = await finalizeBoundAssistantAnswer(runtime, () => {});
+  expect(result.text).toBe(snapshot.text);
+  expect(result.markdown).toBe("**Bound final answer**");
+  expect(result.answerRelationship.assistantMessageId).toBe(snapshot.messageId);
+  changed = true;
+  await expect(verifyBoundAssistantReturn(runtime, result.text, result.markdown)).rejects.toThrow(/changed/);
+});

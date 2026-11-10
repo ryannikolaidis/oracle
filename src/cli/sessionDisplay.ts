@@ -374,7 +374,7 @@ export async function attachSession(
         errorMessage: undefined,
         browser: {
           config: metadata.browser?.config,
-          runtime,
+          runtime: { ...runtime, answerRelationship: result.answerRelationship },
           modelSelection: metadata.browser?.modelSelection,
           thinkingSelection: metadata.browser?.thinkingSelection,
           warnings: metadata.browser?.warnings,
