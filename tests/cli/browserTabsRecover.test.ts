@@ -852,6 +852,7 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
 describe("browser tab endpoint discovery", () => {
   test("preserves HTTP discovery and distinct saved browser sockets after restarts", async () => {
     vi.resetModules();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("discovery unavailable"));
     const collectChatGptTabs = vi.fn(async () => []);
     vi.doMock("../../src/browser/liveTabs.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../../src/browser/liveTabs.js")>()),
@@ -874,6 +875,7 @@ describe("browser tab endpoint discovery", () => {
     }));
     const { showBrowserTabsStatus } = await import("../../src/cli/browserTabs.js");
     await showBrowserTabsStatus();
+    fetchSpy.mockRestore();
     expect(collectChatGptTabs).toHaveBeenCalledTimes(3);
     expect(collectChatGptTabs).toHaveBeenCalledWith({ host: "127.0.0.1", port: 9222 });
     for (const id of ["old", "current"])
