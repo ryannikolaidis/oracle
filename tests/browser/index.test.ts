@@ -1043,7 +1043,7 @@ describe("runSubmissionWithRecoveryForTest", () => {
         submit,
         reloadPromptComposer: vi.fn(async () => {}),
         prepareFallbackSubmission: clear,
-        logger: vi.fn(),
+        logger: (_message: string) => {},
       }),
     ).rejects.toThrow(/cannot attest uploaded attachment/);
     expect(prepare).toHaveBeenCalledOnce();
