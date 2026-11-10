@@ -14,7 +14,14 @@ describe("applyBrowserDefaultsFromConfig", () => {
     const options: BrowserDefaultsOptions = {};
     const config: UserConfig = { browser: { answerCapture: "json-code" } };
     applyBrowserDefaultsFromConfig(options, config, source);
-    expect((await buildBrowserConfig({ ...options, model: "gpt-5.4-pro" })).answerCapture).toBe("json-code");
+    expect(
+      (
+        await buildBrowserConfig({
+          browserAnswerCapture: options.browserAnswerCapture,
+          model: "gpt-5.4-pro",
+        })
+      ).answerCapture,
+    ).toBe("json-code");
     options.browserAnswerCapture = "dom-text";
     applyBrowserDefaultsFromConfig(options, config, () => "cli");
     expect(options.browserAnswerCapture).toBe("dom-text");

@@ -868,7 +868,8 @@ async function runBrowserModeInternal(
   const fallbackSubmission = options.fallbackSubmission;
 
   let config = resolveBrowserConfig(options.config);
-  if (config.researchMode === "deep" || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
+  const deepResearch = config.researchMode === "deep";
+  if (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
     throw new Error("Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts");
   }
   const usingCopiedProfile = Boolean(config.copyProfileSource);
@@ -880,15 +881,6 @@ async function runBrowserModeInternal(
   }
   const isResumingConversation = Boolean(config.resumeConversationUrl);
   const followUpPrompts = normalizeBrowserFollowUpPrompts(options.followUpPrompts);
-  if (config.researchMode === "deep" && followUpPrompts.length > 0) {
-    throw new BrowserAutomationError(
-      "Browser follow-ups are not supported with Deep Research mode. Put the full research plan into the initial prompt or run a normal browser consult for multi-turn review.",
-      {
-        stage: "browser-follow-ups",
-        details: { researchMode: "deep", followUps: followUpPrompts.length },
-      },
-    );
-  }
   const logger: BrowserLogger = options.log ?? ((_message: string) => {});
   if (logger.verbose === undefined) {
     logger.verbose = Boolean(config.debug);
@@ -1543,7 +1535,6 @@ async function runBrowserModeInternal(
           : "Model picker: skipped (strategy=ignore)",
       );
     }
-    const deepResearch = config.researchMode === "deep";
     if (shouldApplyThinkingTimeSelection(config)) {
       const thinkingTargetModel = modelStrategy === "select" ? config.desiredModel : null;
       thinkingSelectionEvidence = await raceWithDisconnect(
@@ -2969,7 +2960,8 @@ async function runRemoteBrowserMode(
   options: BrowserRunOptions,
   cancellation: BrowserCancellation,
 ): Promise<BrowserRunResult> {
-  if (config.researchMode === "deep" || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
+  const deepResearch = config.researchMode === "deep";
+  if (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
     throw new Error("Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts");
   }
   const remoteChromeConfig = config.remoteChrome;
@@ -3252,7 +3244,6 @@ async function runRemoteBrowserMode(
           : "Model picker: skipped (strategy=ignore)",
       );
     }
-    const deepResearch = config.researchMode === "deep";
     if (shouldApplyThinkingTimeSelection(config)) {
       const thinkingTargetModel = modelStrategy === "select" ? config.desiredModel : null;
       thinkingSelectionEvidence = await withRetries(
