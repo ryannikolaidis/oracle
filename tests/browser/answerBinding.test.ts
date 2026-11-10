@@ -700,7 +700,6 @@ test("releases only the completed observation and refuses subsequent bound reads
   const p = page();
   let disconnected = 0;
   class Observer {
-    constructor(_callback: unknown) {}
     observe() {}
     disconnect() {
       disconnected += 1;
