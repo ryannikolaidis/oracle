@@ -22,6 +22,14 @@ export interface AnswerRelationship {
 type Binding = SubmittedPromptEvidence & { conversationId: string; observationId: string };
 const poisoned = new WeakSet<ChromeClient["Runtime"]>();
 const bindings = new WeakMap<ChromeClient["Runtime"], Binding>();
+// JSON capture revalidates its complete layout on each read. Its payload and identity
+// are stable evidence; accepted code-header labels are presentation only.
+function snapshotKey(snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null }, mode: "dom-text" | "json-code" = "dom-text"): string {
+  return JSON.stringify(mode === "json-code"
+    ? [snapshot.messageId, snapshot.text]
+    : [snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]);
+}
+
 const finalized = new WeakMap<ChromeClient["Runtime"], { snapshot: string; evidence: AnswerRelationship }>();
 export const answerDigest = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -165,7 +173,7 @@ export function recordBoundAnswer(
     answerCapture,
   };
   Object.freeze(evidence);
-  finalized.set(runtime, { snapshot: JSON.stringify([snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]), evidence });
+  finalized.set(runtime, { snapshot: snapshotKey(snapshot, answerCapture), evidence });
   return evidence;
 }
 
@@ -177,7 +185,7 @@ export function recheckBoundAnswer(
 ): AnswerRelationship {
   const saved = finalized.get(runtime);
   if (!saved || !snapshot ||
-      saved.snapshot !== JSON.stringify([snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]) ||
+      saved.snapshot !== snapshotKey(snapshot, saved.evidence.answerCapture) ||
       saved.evidence.answerTextSha256 !== answerDigest(answerText) ||
       saved.evidence.answerMarkdownSha256 !== answerDigest(answerMarkdown)) {
     throw new Error("Answer changed after relationship verification; refusing successful return");

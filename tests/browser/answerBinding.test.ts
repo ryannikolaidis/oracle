@@ -361,3 +361,43 @@ test("structured reader refuses unbound utilities and duplicate matching assista
   const p = page([user(), jsonAssistant("{}").message, jsonAssistant("{}").message]);
   await expect(readStructuredAnswer(p.runtime)).rejects.toThrow();
 });
+
+
+test("structured return revalidates layout while allowing accepted code-header text changes", async () => {
+  const text = ' {"ok":true}\n';
+  const answer = jsonAssistant(text);
+  const header = new FakeElement("div", {}, [new FakeElement("span", {}, [], "json")]);
+  let button = new FakeElement("button", {}, [], "Copy code");
+  header.append(button);
+  answer.pre.children.unshift(header);
+  header.parentElement = answer.pre;
+  // Exercise the HTML comparison as well as the extraction path in the fake DOM.
+  Object.defineProperty(answer.message, "innerHTML", { get: () => `<pre>json<button>${button.textContent}</button><code>${text}</code></pre>` });
+  const p = page([user(), answer.message]);
+  const result = await finalizeBoundAssistantAnswer(p.runtime, () => {}, "json-code");
+  for (const label of ["Copied", "Copied!", "Copy"]) {
+    button.remove();
+    button = new FakeElement("button", {}, [], label);
+    header.append(button);
+    await expect(verifyBoundAssistantReturn(p.runtime, text, text, "json-code")).resolves.toEqual(result.answerRelationship);
+  }
+  button.remove();
+  button = new FakeElement("button", {}, [], "Run code");
+  header.append(button);
+  await expect(verifyBoundAssistantReturn(p.runtime, text, text, "json-code")).rejects.toThrow(/Structured answer/);
+});
+
+
+test.each(["message-id", "turn-key"])("binds JSON capture to an ARTICLE assistant using %s", async identity => {
+  const answer = jsonAssistant('{"ok":true}');
+  const message = new FakeElement("article", {
+    "data-turn": "assistant",
+    [identity === "message-id" ? "data-message-id" : "data-turn-key"]: "answer-original",
+  }, [...answer.message.children]);
+  const observed = user();
+  if (identity === "turn-key") observed.setAttribute("data-turn-key", receipt.messageId);
+  const p = page([observed, message]);
+  const result = await finalizeBoundAssistantAnswer(p.runtime, () => {}, "json-code");
+  expect(result.text).toBe('{"ok":true}');
+  expect(result.answerRelationship.assistantMessageId).toBe("answer-original");
+});
