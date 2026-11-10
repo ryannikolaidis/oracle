@@ -23,18 +23,23 @@ export function assertAttestableAttachments(
 export function verifyStrictCaptureResult(result: BrowserRunResult): void {
   const receipt = result.answerRelationship;
   if (
-    !receipt || receipt.version !== 1 ||
+    !receipt ||
+    receipt.version !== 1 ||
     receipt.relationship !== "sole-assistant-after-user" ||
     receipt.answerCapture !== "json-code" ||
-    !receipt.conversationId || !receipt.observationId ||
-    !receipt.userMessageId || !receipt.assistantMessageId ||
-    !result.submittedPromptHash || !result.submittedPromptSha256 ||
+    !receipt.conversationId ||
+    !receipt.observationId ||
+    !receipt.userMessageId ||
+    !receipt.assistantMessageId ||
+    !result.submittedPromptHash ||
+    !result.submittedPromptSha256 ||
     receipt.conversationId !== result.submittedPromptConversationId ||
     receipt.observationId !== result.submittedPromptObservationId ||
     receipt.userMessageId !== result.submittedPromptMessageId ||
     receipt.userSha256 !== result.submittedPromptSha256 ||
     receipt.userLength !== result.submittedPromptLength ||
-    !Number.isSafeInteger(receipt.userLength) || receipt.userLength <= 0 ||
+    !Number.isSafeInteger(receipt.userLength) ||
+    receipt.userLength <= 0 ||
     result.answerText !== result.answerMarkdown ||
     receipt.answerTextSha256 !== answerDigest(result.answerText) ||
     receipt.answerMarkdownSha256 !== answerDigest(result.answerMarkdown)

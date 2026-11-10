@@ -30,95 +30,147 @@ const CAN_LISTEN_LOCALHOST =
   ).status === 0;
 
 describe("remote browser service", () => {
-  test.skipIf(!CAN_LISTEN_LOCALHOST)("preserves strict mode and exact JSON bytes across the bridge", async () => {
-    const hostPath = "/host-private/artifacts/output.zip";
-    const answer = ` \n{"path":"${hostPath}","unicode":"Hé😀"}\n `;
-    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-    const receipt = {
-      version: 1 as const,
-      relationship: "sole-assistant-after-user" as const,
-      answerCapture: "json-code" as const,
-      conversationId: "conversation", observationId: "observation",
-      userMessageId: "user", userSha256: digest("review"), userLength: 6,
-      assistantMessageId: "assistant",
-      answerTextSha256: digest(answer), answerMarkdownSha256: digest(answer),
-    };
-    const fixture: BrowserRunResult = {
-      answerText: answer, answerMarkdown: answer, tookMs: 1, answerTokens: 1,
-      answerChars: answer.length, answerRelationship: receipt,
-      submittedPromptHash: "fingerprint", submittedPromptSha256: receipt.userSha256,
-      submittedPromptLength: 6, submittedPromptMessageId: "user",
-      submittedPromptConversationId: "conversation", submittedPromptObservationId: "observation",
-      artifacts: [{ kind: "file", path: hostPath, label: "output.zip", mimeType: "application/zip", sizeBytes: 1 }],
-    };
-    const runBrowser = vi.fn(async (_options: Parameters<typeof runBrowserMode>[0]) => fixture);
-    const server = await createRemoteServer(
-      { host: "127.0.0.1", port: 0, token: "strict", logger: () => {} },
-      { runBrowser },
-    );
-    const execute = createRemoteBrowserExecutor({ host: `127.0.0.1:${server.port}`, token: "strict" });
-    try {
-      const result = await execute({ prompt: "review", config: { answerCapture: "json-code" } });
-      expect(runBrowser.mock.calls[0]?.[0].config?.answerCapture).toBe("json-code");
-      expect(result.answerText).toBe(answer);
-      expect(result.answerMarkdown).toBe(answer);
-      expect(result.answerRelationship).toEqual(receipt);
-      for (const change of [
-        { answerRelationship: undefined },
-        { answerRelationship: { ...receipt, answerCapture: "dom-text" as const } },
-        { answerText: answer.trim(), answerMarkdown: answer.trim() },
-        { submittedPromptMessageId: "other-user" },
-        { submittedPromptObservationId: "other-observation" },
-      ]) {
-        runBrowser.mockImplementationOnce(async () => ({ ...fixture, ...change }));
-        await expect(execute({ prompt: "review", config: { answerCapture: "json-code" } }))
-          .rejects.toThrow(/json-code answer relationship/);
+  test.skipIf(!CAN_LISTEN_LOCALHOST)(
+    "preserves strict mode and exact JSON bytes across the bridge",
+    async () => {
+      const hostPath = "/host-private/artifacts/output.zip";
+      const answer = ` \n{"path":"${hostPath}","unicode":"Hé😀"}\n `;
+      const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+      const receipt = {
+        version: 1 as const,
+        relationship: "sole-assistant-after-user" as const,
+        answerCapture: "json-code" as const,
+        conversationId: "conversation",
+        observationId: "observation",
+        userMessageId: "user",
+        userSha256: digest("review"),
+        userLength: 6,
+        assistantMessageId: "assistant",
+        answerTextSha256: digest(answer),
+        answerMarkdownSha256: digest(answer),
+      };
+      const fixture: BrowserRunResult = {
+        answerText: answer,
+        answerMarkdown: answer,
+        tookMs: 1,
+        answerTokens: 1,
+        answerChars: answer.length,
+        answerRelationship: receipt,
+        submittedPromptHash: "fingerprint",
+        submittedPromptSha256: receipt.userSha256,
+        submittedPromptLength: 6,
+        submittedPromptMessageId: "user",
+        submittedPromptConversationId: "conversation",
+        submittedPromptObservationId: "observation",
+        artifacts: [
+          {
+            kind: "file",
+            path: hostPath,
+            label: "output.zip",
+            mimeType: "application/zip",
+            sizeBytes: 1,
+          },
+        ],
+      };
+      const runBrowser = vi.fn(async (_options: Parameters<typeof runBrowserMode>[0]) => fixture);
+      const server = await createRemoteServer(
+        { host: "127.0.0.1", port: 0, token: "strict", logger: () => {} },
+        { runBrowser },
+      );
+      const execute = createRemoteBrowserExecutor({
+        host: `127.0.0.1:${server.port}`,
+        token: "strict",
+      });
+      try {
+        const result = await execute({ prompt: "review", config: { answerCapture: "json-code" } });
+        expect(runBrowser.mock.calls[0]?.[0].config?.answerCapture).toBe("json-code");
+        expect(result.answerText).toBe(answer);
+        expect(result.answerMarkdown).toBe(answer);
+        expect(result.answerRelationship).toEqual(receipt);
+        for (const change of [
+          { answerRelationship: undefined },
+          { answerRelationship: { ...receipt, answerCapture: "dom-text" as const } },
+          { answerText: answer.trim(), answerMarkdown: answer.trim() },
+          { submittedPromptMessageId: "other-user" },
+          { submittedPromptObservationId: "other-observation" },
+        ]) {
+          runBrowser.mockImplementationOnce(async () => ({ ...fixture, ...change }));
+          await expect(
+            execute({ prompt: "review", config: { answerCapture: "json-code" } }),
+          ).rejects.toThrow(/json-code answer relationship/);
+        }
+      } finally {
+        await server.close();
       }
-    } finally {
-      await server.close();
-    }
-  });
+    },
+  );
 
   test.skipIf(!CAN_LISTEN_LOCALHOST).each([
     { model: "gemini-3.5-flash", attachments: [], error: "only supported by the ChatGPT" },
-    { model: "gpt-5.5", attachments: [{ fileName: "source.txt", contentBase64: "eA==" }], error: "cannot attest uploaded attachment" },
-  ])("refuses unsupported strict requests before invoking the executor: $model", async ({ model, attachments, error }) => {
-    const runBrowser = vi.fn();
-    const server = await createRemoteServer(
-      { host: "127.0.0.1", port: 0, token: "strict", logger: () => {} }, { runBrowser },
-    );
-    try {
-      const response = await fetch(`http://127.0.0.1:${server.port}/runs`, {
-        method: "POST",
-        headers: { Authorization: "Bearer strict", "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: "review", attachments, browserConfig: { answerCapture: "json-code" }, options: { model } }),
-      });
-      expect(response.status).toBe(400);
-      expect(await response.text()).toContain(error);
-      expect(runBrowser).not.toHaveBeenCalled();
-    } finally {
-      await server.close();
-    }
-  });
+    {
+      model: "gpt-5.5",
+      attachments: [{ fileName: "source.txt", contentBase64: "eA==" }],
+      error: "cannot attest uploaded attachment",
+    },
+  ])(
+    "refuses unsupported strict requests before invoking the executor: $model",
+    async ({ model, attachments, error }) => {
+      const runBrowser = vi.fn();
+      const server = await createRemoteServer(
+        { host: "127.0.0.1", port: 0, token: "strict", logger: () => {} },
+        { runBrowser },
+      );
+      try {
+        const response = await fetch(`http://127.0.0.1:${server.port}/runs`, {
+          method: "POST",
+          headers: { Authorization: "Bearer strict", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: "review",
+            attachments,
+            browserConfig: { answerCapture: "json-code" },
+            options: { model },
+          }),
+        });
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain(error);
+        expect(runBrowser).not.toHaveBeenCalled();
+      } finally {
+        await server.close();
+      }
+    },
+  );
 
-  test.skipIf(!CAN_LISTEN_LOCALHOST)("strict clients refuse legacy hosts returning unattested answers", async () => {
-    const legacy = http.createServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
-      res.end(JSON.stringify({ type: "result", result: {
-        answerText: "{}", answerMarkdown: "{}", tookMs: 1, answerTokens: 1, answerChars: 2,
-      } }) + "\n");
-    });
-    await new Promise<void>((resolve) => legacy.listen(0, "127.0.0.1", resolve));
-    try {
-      const address = legacy.address() as { port: number };
-      const execute = createRemoteBrowserExecutor({ host: `127.0.0.1:${address.port}` });
-      await expect(execute({ prompt: "review", config: { answerCapture: "json-code" } }))
-        .rejects.toThrow(/json-code answer relationship/);
-      await expect(execute({ prompt: "review" })).resolves.toMatchObject({ answerText: "{}" });
-    } finally {
-      await new Promise<void>((resolve) => legacy.close(() => resolve()));
-    }
-  });
+  test.skipIf(!CAN_LISTEN_LOCALHOST)(
+    "strict clients refuse legacy hosts returning unattested answers",
+    async () => {
+      const legacy = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end(
+          JSON.stringify({
+            type: "result",
+            result: {
+              answerText: "{}",
+              answerMarkdown: "{}",
+              tookMs: 1,
+              answerTokens: 1,
+              answerChars: 2,
+            },
+          }) + "\n",
+        );
+      });
+      await new Promise<void>((resolve) => legacy.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = legacy.address() as { port: number };
+        const execute = createRemoteBrowserExecutor({ host: `127.0.0.1:${address.port}` });
+        await expect(
+          execute({ prompt: "review", config: { answerCapture: "json-code" } }),
+        ).rejects.toThrow(/json-code answer relationship/);
+        await expect(execute({ prompt: "review" })).resolves.toMatchObject({ answerText: "{}" });
+      } finally {
+        await new Promise<void>((resolve) => legacy.close(() => resolve()));
+      }
+    },
+  );
 
   test.skipIf(!CAN_LISTEN_LOCALHOST).each([undefined, 1])(
     "rejects unknown providers and releases admission capacity (maxConcurrentRuns=%s)",

@@ -1,5 +1,9 @@
 import http from "node:http";
-import { assertSupportedAnswerCapture, assertAttestableAttachments, verifyStrictCaptureResult } from "../browser/strictCapture.js";
+import {
+  assertSupportedAnswerCapture,
+  assertAttestableAttachments,
+  verifyStrictCaptureResult,
+} from "../browser/strictCapture.js";
 import { createWriteStream } from "node:fs";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -50,7 +54,10 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
       options.model ?? runOptions?.model,
       options.config?.desiredModel,
     );
-    assertSupportedAnswerCapture(options.config?.answerCapture, resolveBrowserProvider(model) ?? "chatgpt");
+    assertSupportedAnswerCapture(
+      options.config?.answerCapture,
+      resolveBrowserProvider(model) ?? "chatgpt",
+    );
     assertAttestableAttachments(options.config?.answerCapture, options.attachments ?? []);
     const gemini = resolveBrowserProvider(model) === "gemini";
     if (
@@ -218,7 +225,8 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
                 fail(new Error("Remote browser run completed without a result."));
                 return;
               }
-              if (options.config?.answerCapture === "json-code") verifyStrictCaptureResult(resolved);
+              if (options.config?.answerCapture === "json-code")
+                verifyStrictCaptureResult(resolved);
               if (preferredImagePath) {
                 const images = transferredArtifacts.filter((artifact) => artifact.kind === "image");
                 if (

@@ -702,7 +702,11 @@ describe("collectGeneratedImageArtifacts", () => {
     );
     expect(result.markdownSuffix).toContain("Saved to:");
     for (const mode of [undefined, "dom-text"] as const) {
-      const answer = mergeGeneratedImageAnswer({ answerText: "stale", answerMarkdown: "**Original**" }, result, mode);
+      const answer = mergeGeneratedImageAnswer(
+        { answerText: "stale", answerMarkdown: "**Original**" },
+        result,
+        mode,
+      );
       expect(answer.answerText).toBe(result.answerText);
       expect(answer.answerMarkdown).toBe("**Original**" + result.markdownSuffix);
       expect(answer.answerMarkdown).toContain(result.savedImages[0]!.path);
@@ -767,9 +771,15 @@ describe("collectGeneratedImageArtifacts", () => {
   });
 });
 
-test.each([undefined, "dom-text"] as const)("retains existing text when the image collector has no refresh (%s)", (mode) => {
-  expect(mergeGeneratedImageAnswer(
-    { answerText: "Existing answer", answerMarkdown: "**Existing answer**" },
-    { answerText: "", markdownSuffix: "" }, mode,
-  )).toEqual({ answerText: "Existing answer", answerMarkdown: "**Existing answer**" });
-});
+test.each([undefined, "dom-text"] as const)(
+  "retains existing text when the image collector has no refresh (%s)",
+  (mode) => {
+    expect(
+      mergeGeneratedImageAnswer(
+        { answerText: "Existing answer", answerMarkdown: "**Existing answer**" },
+        { answerText: "", markdownSuffix: "" },
+        mode,
+      ),
+    ).toEqual({ answerText: "Existing answer", answerMarkdown: "**Existing answer**" });
+  },
+);

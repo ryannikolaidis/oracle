@@ -205,9 +205,12 @@ describe("gemini-web executor", () => {
 
   it("refuses json-code before cookie access or provider calls", async () => {
     const { createGeminiWebExecutor } = await import("../../src/gemini-web/executor.js");
-    await expect(createGeminiWebExecutor({})({
-      prompt: "review", config: { answerCapture: "json-code" },
-    })).rejects.toThrow(/only supported by the ChatGPT/);
+    await expect(
+      createGeminiWebExecutor({})({
+        prompt: "review",
+        config: { answerCapture: "json-code" },
+      }),
+    ).rejects.toThrow(/only supported by the ChatGPT/);
     expect(getCookies).not.toHaveBeenCalled();
     expect(runGeminiWebWithFallback).not.toHaveBeenCalled();
     expect(launchChrome).not.toHaveBeenCalled();

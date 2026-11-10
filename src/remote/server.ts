@@ -1,5 +1,9 @@
 import http from "node:http";
-import { assertSupportedAnswerCapture, assertAttestableAttachments, verifyStrictCaptureResult } from "../browser/strictCapture.js";
+import {
+  assertSupportedAnswerCapture,
+  assertAttestableAttachments,
+  verifyStrictCaptureResult,
+} from "../browser/strictCapture.js";
 import { createReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import os from "node:os";
@@ -322,7 +326,10 @@ export async function createRemoteServer(
     let model: string | undefined;
     try {
       model = resolveRemoteBrowserModel(payload.options.model, payload.browserConfig?.desiredModel);
-      assertSupportedAnswerCapture(payload.browserConfig?.answerCapture, resolveBrowserProvider(model) ?? "chatgpt");
+      assertSupportedAnswerCapture(
+        payload.browserConfig?.answerCapture,
+        resolveBrowserProvider(model) ?? "chatgpt",
+      );
       assertAttestableAttachments(payload.browserConfig?.answerCapture, payload.attachments ?? []);
       if (resolveBrowserProvider(model) === "gemini" && payload.options.imageOutputRequested) {
         throw new Error(

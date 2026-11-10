@@ -2391,7 +2391,9 @@ async function runBrowserModeInternal(
         }),
     });
     ({ answerText, answerMarkdown } = mergeGeneratedImageAnswer(
-      { answerText, answerMarkdown }, imageArtifacts, config.answerCapture,
+      { answerText, answerMarkdown },
+      imageArtifacts,
+      config.answerCapture,
     ));
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
@@ -4007,7 +4009,9 @@ async function runRemoteBrowserMode(
         }),
     });
     ({ answerText, answerMarkdown } = mergeGeneratedImageAnswer(
-      { answerText, answerMarkdown }, imageArtifacts, config.answerCapture,
+      { answerText, answerMarkdown },
+      imageArtifacts,
+      config.answerCapture,
     ));
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,

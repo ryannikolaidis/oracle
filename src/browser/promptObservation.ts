@@ -42,13 +42,15 @@ export async function releasePromptObservation(
   observationId: string | null | undefined,
 ): Promise<void> {
   if (!observationId) return;
-  await runtime.evaluate({
-    expression: `(() => {
+  await runtime
+    .evaluate({
+      expression: `(() => {
       const registry = globalThis.__oraclePromptObservations;
       const key = ${JSON.stringify(observationId)};
       registry?.get(key)?.disconnect?.();
       registry?.delete(key);
     })()`,
-    returnByValue: true,
-  }).catch(() => undefined);
+      returnByValue: true,
+    })
+    .catch(() => undefined);
 }

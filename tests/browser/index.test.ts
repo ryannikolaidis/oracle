@@ -1015,23 +1015,37 @@ describe("shouldPreferSystemTmpDirForTest", () => {
 describe("runSubmissionWithRecoveryForTest", () => {
   test("strict capture refuses uploads before connecting, including remote Chrome", async () => {
     for (const remoteChrome of [undefined, { host: "127.0.0.1", port: 1 }]) {
-      await expect(runBrowserMode({
-        prompt: "review", attachments: [{ path: "/absent/source.txt", displayPath: "source.txt" }],
-        config: { answerCapture: "json-code", remoteChrome },
-      })).rejects.toThrow(/cannot attest uploaded attachment/);
+      await expect(
+        runBrowserMode({
+          prompt: "review",
+          attachments: [{ path: "/absent/source.txt", displayPath: "source.txt" }],
+          config: { answerCapture: "json-code", remoteChrome },
+        }),
+      ).rejects.toThrow(/cannot attest uploaded attachment/);
     }
   });
 
   test("strict capture refuses attachments materialized by fallback preparation before touching the composer", async () => {
     const attachments: Array<{ path: string; displayPath: string }> = [];
-    const prepare = vi.fn(async () => { attachments.push({ path: "/absent/bundle.txt", displayPath: "bundle.txt" }); });
-    const submit = vi.fn().mockRejectedValue(new BrowserAutomationError("too large", { code: "prompt-too-large" }));
+    const prepare = vi.fn(async () => {
+      attachments.push({ path: "/absent/bundle.txt", displayPath: "bundle.txt" });
+    });
+    const submit = vi
+      .fn()
+      .mockRejectedValue(new BrowserAutomationError("too large", { code: "prompt-too-large" }));
     const clear = vi.fn(async () => {});
-    await expect(runSubmissionWithRecoveryForTest({
-      prompt: "inline", attachments: [], answerCapture: "json-code",
-      fallbackSubmission: { prompt: "uploaded", attachments, prepare },
-      submit, reloadPromptComposer: vi.fn(async () => {}), prepareFallbackSubmission: clear, logger: vi.fn(),
-    })).rejects.toThrow(/cannot attest uploaded attachment/);
+    await expect(
+      runSubmissionWithRecoveryForTest({
+        prompt: "inline",
+        attachments: [],
+        answerCapture: "json-code",
+        fallbackSubmission: { prompt: "uploaded", attachments, prepare },
+        submit,
+        reloadPromptComposer: vi.fn(async () => {}),
+        prepareFallbackSubmission: clear,
+        logger: vi.fn(),
+      }),
+    ).rejects.toThrow(/cannot attest uploaded attachment/);
     expect(prepare).toHaveBeenCalledOnce();
     expect(submit).toHaveBeenCalledOnce();
     expect(clear).not.toHaveBeenCalled();
@@ -1045,19 +1059,29 @@ describe("runSubmissionWithRecoveryForTest", () => {
       const successful = { baselineTurns: 1, baselineAssistantText: "" };
       const submit = vi.fn().mockResolvedValue(successful);
       const args = {
-        prompt: "inline", attachments: [], answerCapture,
+        prompt: "inline",
+        attachments: [],
+        answerCapture,
         fallbackSubmission: {
-          prompt: "uploaded", attachments: [{ path: "/absent/source.txt", displayPath: "source.txt" }], prepare: prepared,
+          prompt: "uploaded",
+          attachments: [{ path: "/absent/source.txt", displayPath: "source.txt" }],
+          prepare: prepared,
         },
-        submit, reloadPromptComposer: vi.fn(async () => {}),
-        prepareFallbackSubmission: clear, logger: vi.fn(),
+        submit,
+        reloadPromptComposer: vi.fn(async () => {}),
+        prepareFallbackSubmission: clear,
+        logger: vi.fn(),
       };
       await expect(runSubmissionWithRecoveryForTest(args)).resolves.toEqual(successful);
       expect(prepared).not.toHaveBeenCalled();
       submit.mockClear();
-      submit.mockRejectedValueOnce(new BrowserAutomationError("too large", { code: "prompt-too-large" }));
+      submit.mockRejectedValueOnce(
+        new BrowserAutomationError("too large", { code: "prompt-too-large" }),
+      );
       if (answerCapture === "json-code") {
-        await expect(runSubmissionWithRecoveryForTest(args)).rejects.toThrow(/cannot attest uploaded attachment/);
+        await expect(runSubmissionWithRecoveryForTest(args)).rejects.toThrow(
+          /cannot attest uploaded attachment/,
+        );
         expect(submit).toHaveBeenCalledOnce();
         expect(prepared).not.toHaveBeenCalled();
         expect(clear).not.toHaveBeenCalled();

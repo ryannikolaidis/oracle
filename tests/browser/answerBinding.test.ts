@@ -20,7 +20,10 @@ import {
   readBoundSubmittedPromptEvidence,
   readSubmittedPromptEvidence,
 } from "../../src/browser/promptFingerprint.js";
-import { buildPromptObservationExpression, releasePromptObservation } from "../../src/browser/promptObservation.js";
+import {
+  buildPromptObservationExpression,
+  releasePromptObservation,
+} from "../../src/browser/promptObservation.js";
 import { FakeDocument, FakeElement } from "./domFixture.js";
 import { readStructuredAnswer } from "../../src/browser/structuredAnswer.js";
 
@@ -699,13 +702,27 @@ test("releases only the completed observation and refuses subsequent bound reads
   class Observer {
     constructor(_callback: unknown) {}
     observe() {}
-    disconnect() { disconnected += 1; }
+    disconnect() {
+      disconnected += 1;
+    }
   }
   const observed = p.document.querySelector('[data-message-author-role="user"]');
-  new Function("document", "location", "globalThis", "MutationObserver", "crypto", "observed",
+  new Function(
+    "document",
+    "location",
+    "globalThis",
+    "MutationObserver",
+    "crypto",
+    "observed",
     `return ${buildPromptObservationExpression("observed")}`,
-  )(p.document, p.location, { __oraclePromptObservations: p.registry }, Observer,
-    { randomUUID: () => receipt.observationId }, observed);
+  )(
+    p.document,
+    p.location,
+    { __oraclePromptObservations: p.registry },
+    Observer,
+    { randomUUID: () => receipt.observationId },
+    observed,
+  );
   const other = { invalidated: false, conversationId: "other" };
   p.registry.set("other", other);
   await expect(evaluateBoundAnswer(p.runtime, selection)).resolves.toBeDefined();
@@ -716,5 +733,7 @@ test("releases only the completed observation and refuses subsequent bound reads
   expect(p.registry.get("other")).toBe(other);
   await releasePromptObservation(p.runtime, receipt.observationId);
   expect(disconnected).toBe(1);
-  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/observation lost or invalidated/);
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(
+    /observation lost or invalidated/,
+  );
 });
