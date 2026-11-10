@@ -1,6 +1,6 @@
 import { bindSubmittedAnswer, requireAnswerBinding, type AnswerRelationship } from "./answerBinding.js";
 import { finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "./actions/assistantResponse.js";
-import { readSubmittedPromptEvidence, readUserMessageIds } from "./promptFingerprint.js";
+import { readBoundSubmittedPromptEvidence, readUserMessageIds } from "./promptFingerprint.js";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -1684,7 +1684,7 @@ async function runBrowserModeInternal(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const observedPrompt = await readSubmittedPromptEvidence(
+      const observedPrompt = await readBoundSubmittedPromptEvidence(
         Runtime,
         previousUserMessageIds,
         config.inputTimeoutMs,
@@ -2354,10 +2354,8 @@ async function runBrowserModeInternal(
           },
         }),
     });
-    answerText = imageArtifacts.answerText || answerText;
-    if (imageArtifacts.markdownSuffix) {
-      answerMarkdown += imageArtifacts.markdownSuffix;
-    }
+    // Image download summaries belong to generatedImages/savedImages/artifacts.
+    // Keep the verified assistant bytes unchanged through the return gate.
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
       Client: client,
@@ -3357,7 +3355,7 @@ async function runRemoteBrowserMode(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const observedPrompt = await readSubmittedPromptEvidence(
+      const observedPrompt = await readBoundSubmittedPromptEvidence(
         Runtime,
         previousUserMessageIds,
         config.inputTimeoutMs,
@@ -3939,10 +3937,8 @@ async function runRemoteBrowserMode(
           },
         }),
     });
-    answerText = imageArtifacts.answerText || answerText;
-    if (imageArtifacts.markdownSuffix) {
-      answerMarkdown += imageArtifacts.markdownSuffix;
-    }
+    // Image download summaries belong to generatedImages/savedImages/artifacts.
+    // Keep the verified assistant bytes unchanged through the return gate.
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
       Client: client,

@@ -43,11 +43,21 @@ export async function readSubmittedPromptFingerprint(
   return (await readSubmittedPromptEvidence(runtime, previousMessageIds, timeoutMs))?.fingerprint;
 }
 
+/** Session binding requires the conversation and observation from the same DOM read. */
+export function readBoundSubmittedPromptEvidence(
+  runtime: ChromeClient["Runtime"],
+  previousMessageIds: readonly string[] | undefined,
+  timeoutMs = 0,
+): Promise<SubmittedPromptEvidence | undefined> {
+  return readSubmittedPromptEvidence(runtime, previousMessageIds, timeoutMs, true);
+}
+
 /** Read both digests from one fresh DOM turn; never substitute requested prompt text. */
 export async function readSubmittedPromptEvidence(
   runtime: ChromeClient["Runtime"],
   previousMessageIds: readonly string[] | undefined,
   timeoutMs = 0,
+  requireContinuity = false,
 ): Promise<SubmittedPromptEvidence | undefined> {
   if (previousMessageIds === undefined) return undefined;
   const previous = new Set(previousMessageIds);
@@ -79,7 +89,11 @@ export async function readSubmittedPromptEvidence(
         turn.text.trim() &&
         typeof turn.messageId === "string" &&
         turn.messageId.trim() &&
-        !previous.has(turn.messageId)
+        !previous.has(turn.messageId) &&
+        (!requireContinuity || (
+          typeof turn.conversationId === "string" && turn.conversationId.trim() &&
+          typeof turn.observationId === "string" && turn.observationId.trim()
+        ))
       ) {
         // Match the legacy fingerprint's line-ending normalization only. Preserve
         // case, spaces, tabs, trailing newlines and Unicode without trimming.

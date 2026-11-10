@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
 import {
   browserPromptFingerprint,
+  readBoundSubmittedPromptEvidence,
   readSubmittedPromptFingerprint,
   readSubmittedPromptEvidence,
   readUserMessageIds,
@@ -309,4 +310,26 @@ test("refuses missing baseline, absent DOM turn and failed DOM reads", async () 
     evaluate: async () => { throw new Error("WebSocket is not open"); },
   } as unknown as ChromeClient["Runtime"];
   expect(await readSubmittedPromptEvidence(runtime, [])).toBeUndefined();
+});
+
+test("session receipt polling waits for conversation and observation identity in the same read", async () => {
+  const reads = [
+    { text: "fresh", messageId: "new" },
+    { text: "fresh", messageId: "new", conversationId: "conversation" },
+    { text: "fresh", messageId: "new", conversationId: " ", observationId: "observation" },
+    { text: "fresh", messageId: "new", conversationId: "conversation", observationId: "observation" },
+  ];
+  let calls = 0;
+  const runtime = { evaluate: async () => ({ result: { value: reads[calls++] } }) } as unknown as ChromeClient["Runtime"];
+  expect(await readBoundSubmittedPromptEvidence(runtime, [], 1000)).toMatchObject({
+    messageId: "new", conversationId: "conversation", observationId: "observation",
+    sha256: createHash("sha256").update("fresh").digest("hex"),
+  });
+  expect(calls).toBe(4);
+});
+
+test("session receipt polling expires without accepting incomplete continuity while fingerprints remain compatible", async () => {
+  const runtime = observedRuntime("fresh", "new");
+  expect(await readBoundSubmittedPromptEvidence(runtime, [], 0)).toBeUndefined();
+  expect(await readSubmittedPromptFingerprint(runtime, [], 0)).toBe(browserPromptFingerprint("fresh", "new"));
 });

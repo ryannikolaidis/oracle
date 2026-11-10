@@ -141,7 +141,7 @@ export async function evaluateBoundAnswer(
 
 export function recordBoundAnswer(
   runtime: ChromeClient["Runtime"],
-  snapshot: { text?: string; html?: string; messageId?: string | null },
+  snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null },
   answerText: string,
   answerMarkdown: string,
 ): AnswerRelationship {
@@ -161,19 +161,19 @@ export function recordBoundAnswer(
     answerMarkdownSha256: answerDigest(answerMarkdown),
   };
   Object.freeze(evidence);
-  finalized.set(runtime, { snapshot: JSON.stringify([snapshot.messageId, snapshot.text, snapshot.html]), evidence });
+  finalized.set(runtime, { snapshot: JSON.stringify([snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]), evidence });
   return evidence;
 }
 
 export function recheckBoundAnswer(
   runtime: ChromeClient["Runtime"],
-  snapshot: { text?: string; html?: string; messageId?: string | null } | null,
+  snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null } | null,
   answerText: string,
   answerMarkdown: string,
 ): AnswerRelationship {
   const saved = finalized.get(runtime);
   if (!saved || !snapshot ||
-      saved.snapshot !== JSON.stringify([snapshot.messageId, snapshot.text, snapshot.html]) ||
+      saved.snapshot !== JSON.stringify([snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]) ||
       saved.evidence.answerTextSha256 !== answerDigest(answerText) ||
       saved.evidence.answerMarkdownSha256 !== answerDigest(answerMarkdown)) {
     throw new Error("Answer changed after relationship verification; refusing successful return");

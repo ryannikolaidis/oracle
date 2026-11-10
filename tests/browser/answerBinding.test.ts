@@ -1,4 +1,4 @@
-import { readAssistantSnapshot, captureAssistantMarkdown, finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "../../src/browser/actions/assistantResponse.js";
+import { buildAssistantExtractorForTest, readAssistantSnapshot, captureAssistantMarkdown, finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "../../src/browser/actions/assistantResponse.js";
 import { expect, test } from "vitest";
 import type { ChromeClient } from "../../src/browser/types.js";
 import {
@@ -200,17 +200,105 @@ test("final capture and successful-return gate reject post-capture edits rather 
     userIds: [receipt.messageId], userText: prompt,
     assistantIds: ["answer-original"], roles: ["assistant"],
   };
-  const runtime = { evaluate: async ({ expression }: { expression: string }) => ({ result: { type: "object", value: {
+  const runtime = { evaluate: async () => ({ result: { type: "object", value: {
     before: read, after: read, observationValid: true,
-    value: expression.includes('const BUTTON_SELECTOR')
-      ? { success: true, markdown: "**Bound final answer**" }
-      : changed ? { ...snapshot, text: "Different answer" } : snapshot,
+    value: changed ? { ...snapshot, text: "Different answer" } : snapshot,
   } } }) } as unknown as ChromeClient["Runtime"];
   bindSubmittedAnswer(runtime, receipt);
   const result = await finalizeBoundAssistantAnswer(runtime, () => {});
   expect(result.text).toBe(snapshot.text);
-  expect(result.markdown).toBe("**Bound final answer**");
+  expect(result.markdown).toBe(snapshot.text);
   expect(result.answerRelationship.assistantMessageId).toBe(snapshot.messageId);
   changed = true;
   await expect(verifyBoundAssistantReturn(runtime, result.text, result.markdown)).rejects.toThrow(/changed/);
+});
+
+test("bound capture ignores competing clipboard bytes with an unchanged assistant DOM", async () => {
+  const snapshot = { text: "  The intended answer\nGo\n  keep indentation\n", html: "<p>The intended answer</p><pre>Go\n  keep indentation</pre>", messageId: "answer-original" };
+  const read = {
+    conversationId: receipt.conversationId, userMessageId: receipt.messageId,
+    userIds: [receipt.messageId], userText: prompt,
+    assistantIds: [snapshot.messageId], roles: ["assistant"],
+  };
+  let copyAttempts = 0;
+  let clipboard = "An unrelated earlier answer";
+  const runtime = { evaluate: async ({ expression }: { expression: string }) => {
+    // Another controller can replace the clipboard during every capture read.
+    clipboard = "Unrelated code block copied concurrently";
+    const copying = expression.includes("navigator.clipboard") || expression.includes("const BUTTON_SELECTOR");
+    if (copying) copyAttempts++;
+    return { result: { value: {
+      before: read, after: read, observationValid: true,
+      value: copying ? { success: true, markdown: clipboard } : snapshot,
+    } } };
+  } } as unknown as ChromeClient["Runtime"];
+  bindSubmittedAnswer(runtime, receipt);
+  expect(await captureAssistantMarkdown(runtime, snapshot, () => {})).toBe(snapshot.text);
+  const result = await finalizeBoundAssistantAnswer(runtime, () => {});
+  expect(result.markdown).toBe(snapshot.text);
+  expect(result.markdown).not.toBe(clipboard);
+  expect(copyAttempts).toBe(0);
+  expect(result.answerRelationship.answerMarkdownSha256).toBe(answerDigest(snapshot.text));
+  await expect(verifyBoundAssistantReturn(runtime, result.text, result.markdown)).resolves.toEqual(result.answerRelationship);
+});
+
+test("image-only completion labels and saved-file summaries are not assistant output", async () => {
+  const snapshot = {
+    text: "Generated image.", contentText: "", html: '<img src="/backend-api/estuary/content?id=file_image">',
+    messageId: "answer-original",
+  };
+  const runtime = protocolRuntime(snapshot);
+  const result = await finalizeBoundAssistantAnswer(runtime, () => {});
+  expect(result.text).toBe("");
+  expect(result.markdown).toBe("");
+  expect(result.answerRelationship.answerTextSha256).toBe(answerDigest(""));
+  expect(result.answerRelationship.answerMarkdownSha256).toBe(answerDigest(""));
+  await expect(verifyBoundAssistantReturn(runtime, result.text, result.markdown)).resolves.toEqual(result.answerRelationship);
+  await expect(verifyBoundAssistantReturn(runtime, result.text, "\n\n*Generated 1 image(s). Saved to: /scratch/image.png*"))
+    .rejects.toThrow(/changed/);
+});
+
+test.each([
+  ["data-message-author-role", "assistant", "user"],
+  ["data-content-search-unit-key", "turn:assistant", "turn:user"],
+  ["data-chatgpt-search-unit-key", "turn:assistant", "turn:user"],
+])("latches batched appearance and reversion through %s before the next guarded read", async (attribute, original, transient) => {
+  const observed = user();
+  const other = assistant();
+  const p = page([observed, other]);
+  let callback: (records: unknown[]) => void = () => {};
+  let options: unknown;
+  class Observer {
+    constructor(fn: typeof callback) { callback = fn; }
+    observe(_target: unknown, config: unknown) { options = config; }
+    disconnect() {}
+  }
+  new Function("document", "location", "globalThis", "MutationObserver", "crypto", "observed",
+    `return ${buildPromptObservationExpression("observed")}`)(
+      p.document, p.location, { __oraclePromptObservations: p.registry }, Observer,
+      { randomUUID: () => receipt.observationId }, observed,
+    );
+  expect(options).toMatchObject({ attributes: true, attributeOldValue: true });
+  other.setAttribute(attribute, transient);
+  other.setAttribute(attribute, original);
+  // MutationObserver delivers both records after the DOM has already reverted.
+  callback([original, transient].map(oldValue => ({
+    type: "attributes", target: other, attributeName: attribute, oldValue,
+    addedNodes: [], removedNodes: [],
+  })));
+  await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/observation lost or invalidated/);
+});
+
+
+test("image extractor keeps synthetic completion text separate from bound assistant content", () => {
+  const image = Object.assign(new FakeElement("img"), {
+    src: "https://chatgpt.com/backend-api/estuary/content?id=file_image",
+  });
+  const message = new FakeElement("div", {
+    "data-message-author-role": "assistant", "data-message-id": "answer-original",
+  }, [image]);
+  const document = new FakeDocument([message]);
+  const snapshot = new Function("document", "HTMLElement",
+    `${buildAssistantExtractorForTest("capture")}; return capture();`)(document, FakeElement);
+  expect(snapshot).toMatchObject({ text: "Generated image.", contentText: "", messageId: "answer-original" });
 });

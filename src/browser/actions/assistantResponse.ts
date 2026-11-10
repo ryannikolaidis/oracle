@@ -487,8 +487,18 @@ export async function captureAssistantMarkdown(
   meta: { messageId?: string | null; turnId?: string | null },
   logger: BrowserLogger,
 ): Promise<string | null> {
+  if (hasAnswerBinding(Runtime)) {
+    // Page-global clipboard writes cannot prove which message supplied the bytes.
+    // Bound sessions use only text read from the selected assistant DOM.
+    const snapshot = await readAssistantSnapshot(Runtime);
+    if (!meta.messageId || snapshot?.messageId !== meta.messageId) {
+      throw new Error("Cannot capture bound answer: unrelated or missing assistant identity");
+    }
+    const content = snapshot.contentText ?? snapshot.text;
+    return typeof content === "string" ? content : null;
+  }
   const { result } = await evaluateBoundAnswer(Runtime, {
-    expression: buildCopyExpression(meta, hasAnswerBinding(Runtime)),
+    expression: buildCopyExpression(meta, false),
     returnByValue: true,
     awaitPromise: true,
   }, meta.messageId ?? null);
@@ -1448,7 +1458,7 @@ function buildAssistantExtractor(functionName: string): string {
         /^(?:reasoning\\s+|pro thinking\\s+)?thought for \\d+(?:\\.\\d+)?\\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)\\s+edit$/.test(normalizedText);
       if (generatedImages.length > 0 && imageOnlyChrome) {
         const label = generatedImages.length === 1 ? 'Generated image.' : \`Generated \${generatedImages.length} images.\`;
-        return { text: label, html: messageRoot?.innerHTML ?? html, messageId, turnId, turnIndex: index };
+        return { text: label, contentText: '', html: messageRoot?.innerHTML ?? html, messageId, turnId, turnIndex: index };
       }
       if (text.trim()) {
         return { text, html, messageId, turnId, turnIndex: index };
@@ -1824,6 +1834,8 @@ function buildCopyExpression(meta: { messageId?: string | null; turnId?: string 
 
 interface AssistantSnapshot {
   text?: string;
+  /** Assistant content when text is a synthetic image-completion label. */
+  contentText?: string;
   html?: string;
   messageId?: string | null;
   turnId?: string | null;
@@ -1880,13 +1892,12 @@ function cleanAssistantText(text: string): string {
 }
 
 /** Discard recovery candidates in favor of a fresh, identity-bound final capture. */
-export async function finalizeBoundAssistantAnswer(Runtime: ChromeClient["Runtime"], logger: BrowserLogger) {
+export async function finalizeBoundAssistantAnswer(Runtime: ChromeClient["Runtime"], _logger: BrowserLogger) {
   requireAnswerBinding(Runtime);
   const snapshot = await readAssistantSnapshot(Runtime);
   if (!snapshot?.text || !snapshot.messageId) throw new Error("No identifiable assistant answer for observed user turn");
-  const markdown = await captureAssistantMarkdown(Runtime, snapshot, logger);
-  const text = cleanAssistantText(snapshot.text);
-  const answerMarkdown = markdown ?? text;
+  const text = snapshot.contentText ?? snapshot.text;
+  const answerMarkdown = text;
   recordBoundAnswer(Runtime, snapshot, text, answerMarkdown);
   const fresh = await readAssistantSnapshot(Runtime);
   const answerRelationship = recheckBoundAnswer(Runtime, fresh, text, answerMarkdown);
