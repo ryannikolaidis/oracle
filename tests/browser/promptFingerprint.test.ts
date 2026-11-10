@@ -357,9 +357,11 @@ function strictDomRuntime(initial: FakeElement[]) {
   let document = new FakeDocument(initial);
   let calls = 0;
   let observations = 0;
-  const registry = {};
+  const registry: { __oraclePromptObservations?: Map<string, { invalidated: boolean }> } = {};
+  let callback: (records: unknown[]) => void = () => {};
   class Observer {
-    constructor() {
+    constructor(fn: typeof callback) {
+      callback = fn;
       observations++;
     }
     observe() {}
@@ -392,6 +394,10 @@ function strictDomRuntime(initial: FakeElement[]) {
     get observations() {
       return observations;
     },
+    get invalidated() {
+      return registry.__oraclePromptObservations?.get("observation")?.invalidated;
+    },
+    mutate: (records: unknown[]) => callback(records),
     replace: (elements: FakeElement[]) => {
       document = new FakeDocument(elements);
     },
@@ -465,6 +471,102 @@ test("strict association accepts one recorded user message with nested role wrap
   });
   expect(page.calls).toBe(1);
   expect(page.observations).toBe(1);
+});
+
+test.each([
+  ["data-message-author-role", "user"],
+  ["data-content-search-unit-key", "hydrated:user"],
+  ["data-chatgpt-search-unit-key", "hydrated:user"],
+])("continuity accepts recorded nested wrapper hydration through %s", async (attribute, value) => {
+  const recorded = recordedUserTurn();
+  const page = strictDomRuntime([recorded.turn]);
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], recorded.bubble.textContent),
+  ).toBeDefined();
+  for (const next of [value, value]) {
+    const oldValue = recorded.inner.getAttribute(attribute);
+    recorded.inner.setAttribute(attribute, next);
+    page.mutate([
+      {
+        type: "attributes",
+        target: recorded.inner,
+        attributeName: attribute,
+        oldValue,
+        addedNodes: [],
+        removedNodes: [],
+      },
+    ]);
+    expect(page.invalidated).toBe(false);
+  }
+});
+
+test.each([
+  "canonical identity",
+  "enclosing turn identity",
+  "nested turn identity",
+  "nested distinct turn",
+  "unrelated role transition",
+  "equal-identity sibling transition",
+  "unidentified sibling transition",
+  "new user turn",
+])("continuity rejects competing or identity mutations: %s", async (scenario) => {
+  const recorded = recordedUserTurn();
+  const other = committedUser(
+    "other",
+    scenario === "unidentified sibling transition" ? undefined : recorded.messageId,
+  );
+  // A distinct nested turn must remain distinct even with equal message IDs.
+  if (scenario === "nested distinct turn") {
+    recorded.user.append(new FakeElement("div", { "data-turn-key": "other-turn" }, [other]));
+  } else if (
+    scenario === "equal-identity sibling transition" ||
+    scenario === "unidentified sibling transition"
+  ) {
+    recorded.turn.append(other);
+  }
+  // Only the observed user is present at association. The other node becomes
+  // user-role later, including transitions reverted before observer delivery.
+  other.setAttribute("data-message-author-role", "assistant");
+  const page = strictDomRuntime([recorded.turn, ...(other.parentElement ? [] : [other])]);
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], recorded.bubble.textContent),
+  ).toBeDefined();
+  let target = other;
+  let attribute = "data-message-author-role";
+  if (scenario === "canonical identity") {
+    target = recorded.user;
+    attribute = "data-chatgpt-search-message-ids";
+  } else if (scenario === "enclosing turn identity") {
+    target = recorded.turn;
+    attribute = "data-turn-key";
+  } else if (scenario === "nested turn identity") {
+    target = recorded.inner;
+    attribute = "data-turn-key";
+  }
+  const oldValue = target.getAttribute(attribute);
+  const transient = attribute === "data-message-author-role" ? "user" : "replacement";
+  target.setAttribute(attribute, transient);
+  target.setAttribute(attribute, oldValue ?? "");
+  page.mutate(
+    scenario === "new user turn"
+      ? [
+        {
+          type: "childList",
+          target: recorded.turn,
+          addedNodes: [committedUser("other", "new-user")],
+          removedNodes: [],
+        },
+      ]
+      : [oldValue, transient].map((value) => ({
+          type: "attributes",
+          target,
+          attributeName: attribute,
+          oldValue: value,
+          addedNodes: [],
+          removedNodes: [],
+        })),
+  );
+  expect(page.invalidated).toBe(true);
 });
 
 test.each([

@@ -10,6 +10,11 @@ export function buildPromptObservationExpression(user = "user"): string {
     const registry = globalThis.__oraclePromptObservations ??= new Map();
     const observation = { invalidated: false, conversationId };
     const selector = ':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])';
+    const turn = user.closest('[data-turn-key]');
+    // Match association's canonical ownership: descendants in the same turn
+    // are wrappers for this message, but a nested distinct turn is competing.
+    const isNestedWrapper = node => user.contains(node) && node !== user &&
+      node.closest?.('[data-turn-key]') === turn;
     const observer = new MutationObserver(records => {
       for (const record of records) {
         const identityAttributes = ['data-message-id', 'data-chatgpt-selection-message-id', 'data-chatgpt-search-message-ids', 'data-content-search-unit-key', 'data-chatgpt-search-unit-key', 'data-turn-key', 'data-message-author-role'];
@@ -17,10 +22,11 @@ export function buildPromptObservationExpression(user = "user"): string {
         const searchAttribute = ['data-content-search-unit-key', 'data-chatgpt-search-unit-key'].includes(record.attributeName);
         const wasUser = (roleAttribute && record.oldValue === 'user') ||
           (searchAttribute && typeof record.oldValue === 'string' && record.oldValue.endsWith(':user'));
-        const foreignUserTransition = record.type === 'attributes' && record.target !== user &&
+        const foreignUserTransition = record.type === 'attributes' && record.target !== user && !isNestedWrapper(record.target) &&
           (roleAttribute || searchAttribute) && (wasUser || record.target.matches?.(selector));
         if (foreignUserTransition || (record.type !== 'attributes' && (record.target === bubble || bubble.contains(record.target))) ||
-            (record.type === 'attributes' && identityAttributes.includes(record.attributeName) && (record.target === user || record.target === user.closest('[data-turn-key]'))) ||
+            (record.type === 'attributes' && identityAttributes.includes(record.attributeName) && (record.target === user || record.target === turn ||
+              (record.attributeName === 'data-turn-key' && user.contains(record.target)))) ||
             Array.from(record.removedNodes).some(node => node === user || node.contains?.(user) || node === bubble || node.contains?.(bubble)) ||
             Array.from(record.addedNodes).some(node => node !== user && (node.matches?.(selector) || node.querySelector?.(selector)))) {
           observation.invalidated = true;
