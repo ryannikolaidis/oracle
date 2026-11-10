@@ -120,6 +120,12 @@ export interface BrowserRuntimeMetadata {
   promptSubmitted?: boolean;
   /** Fingerprint of committed user text and stable message ID; null until commitment is confirmed. */
   submittedPromptHash?: string | null;
+  /** SHA-256 hex of observed user-turn text: CRLF/lone CR to LF, UTF-8, no other normalization. */
+  submittedPromptSha256?: string | null;
+  /** UTF-8 byte length of the same normalized observed text; null without fresh evidence. */
+  submittedPromptLength?: number | null;
+  /** Stable DOM identity of the same freshly selected user turn; null without fresh evidence. */
+  submittedPromptMessageId?: string | null;
   /** Latest Deep Research plan captured from ChatGPT's out-of-process iframe. */
   researchPlan?: BrowserResearchPlanMetadata;
   /** PID of the controller process that launched this browser run. Helps detect orphaned sessions. */
@@ -747,7 +753,12 @@ export async function initializeSession(
       mode === "browser"
         ? {
             ...(browserConfig ? { config: browserConfig } : {}),
-            runtime: { submittedPromptHash: null },
+            runtime: {
+              submittedPromptHash: null,
+              submittedPromptSha256: null,
+              submittedPromptLength: null,
+              submittedPromptMessageId: null,
+            },
           }
         : browserConfig
           ? { config: browserConfig }

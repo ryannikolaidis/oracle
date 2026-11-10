@@ -144,6 +144,9 @@ describe("session lifecycle", () => {
       await readFile(path.join(sessionModule.getSessionsDir(), metadata.id, "meta.json"), "utf8"),
     );
     expect(stored.browser.runtime.submittedPromptHash).toBeNull();
+    expect(stored.browser.runtime.submittedPromptSha256).toBeNull();
+    expect(stored.browser.runtime.submittedPromptLength).toBeNull();
+    expect(stored.browser.runtime.submittedPromptMessageId).toBeNull();
   });
 
   test("initializeSession writes metadata, request, and log files", async () => {

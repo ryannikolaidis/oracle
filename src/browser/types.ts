@@ -233,6 +233,12 @@ export interface BrowserRunResult {
   conversationId?: string;
   promptSubmitted?: boolean;
   submittedPromptHash?: string | null;
+  /** SHA-256 hex of observed user-turn text: CRLF/lone CR to LF, UTF-8, no other normalization. */
+  submittedPromptSha256?: string | null;
+  /** UTF-8 byte length of the same normalized observed text; null without fresh evidence. */
+  submittedPromptLength?: number | null;
+  /** Stable DOM identity of the same freshly selected user turn; null without fresh evidence. */
+  submittedPromptMessageId?: string | null;
   researchPlan?: BrowserResearchPlanMetadata;
   controllerPid?: number;
 }

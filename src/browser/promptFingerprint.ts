@@ -23,11 +23,29 @@ export function readUserMessageIds(
   );
 }
 
+export interface SubmittedPromptEvidence {
+  fingerprint: string;
+  sha256: string;
+  /** UTF-8 byte length after CRLF and lone CR are converted to LF. */
+  length: number;
+  messageId: string;
+}
+
+// Preserve the existing fingerprint-only interface for callers such as tab harvest.
 export async function readSubmittedPromptFingerprint(
   runtime: ChromeClient["Runtime"],
   previousMessageIds: readonly string[] | undefined,
   timeoutMs = 0,
 ): Promise<string | undefined> {
+  return (await readSubmittedPromptEvidence(runtime, previousMessageIds, timeoutMs))?.fingerprint;
+}
+
+/** Read both digests from one fresh DOM turn; never substitute requested prompt text. */
+export async function readSubmittedPromptEvidence(
+  runtime: ChromeClient["Runtime"],
+  previousMessageIds: readonly string[] | undefined,
+  timeoutMs = 0,
+): Promise<SubmittedPromptEvidence | undefined> {
   if (previousMessageIds === undefined) return undefined;
   const previous = new Set(previousMessageIds);
   return readDomUntil(
@@ -50,8 +68,17 @@ export async function readSubmittedPromptFingerprint(
         typeof turn.messageId === "string" &&
         turn.messageId.trim() &&
         !previous.has(turn.messageId)
-      )
-        return browserPromptFingerprint(turn.text, turn.messageId);
+      ) {
+        // Match the legacy fingerprint's line-ending normalization only. Preserve
+        // case, spaces, tabs, trailing newlines and Unicode without trimming.
+        const text = turn.text.replace(/\r\n?/g, "\n");
+        return {
+          fingerprint: browserPromptFingerprint(turn.text, turn.messageId),
+          sha256: createHash("sha256").update(text, "utf8").digest("hex"),
+          length: Buffer.byteLength(text, "utf8"),
+          messageId: turn.messageId,
+        };
+      }
       return undefined;
     },
   );

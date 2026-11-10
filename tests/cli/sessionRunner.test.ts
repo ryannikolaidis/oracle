@@ -1374,6 +1374,9 @@ describe("performSessionRun", () => {
           config: { desiredModel: "Old Pro" },
           runtime: {
             submittedPromptHash,
+            submittedPromptSha256: "a".repeat(64),
+            submittedPromptLength: 123,
+            submittedPromptMessageId: "old-message",
             promptSubmitted: true,
             tabUrl: "https://chatgpt.com/c/old",
           },
@@ -1408,7 +1411,12 @@ describe("performSessionRun", () => {
       for (const update of [updates[0]?.[1], updates.at(-1)?.[1]]) {
         expect(update?.browser).toEqual({
           config: { chromePath: null },
-          runtime: { submittedPromptHash: null },
+          runtime: {
+            submittedPromptHash: null,
+            submittedPromptSha256: null,
+            submittedPromptLength: null,
+            submittedPromptMessageId: null,
+          },
         });
       }
     },

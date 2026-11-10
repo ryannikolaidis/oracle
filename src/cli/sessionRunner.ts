@@ -102,7 +102,14 @@ export async function performSessionRun({
     ? {
         config: browserConfig,
         ...(mode === "browser" && sessionMeta.browser?.runtime?.submittedPromptHash !== undefined
-          ? { runtime: { submittedPromptHash: null } }
+          ? {
+              runtime: {
+                submittedPromptHash: null,
+                submittedPromptSha256: null,
+                submittedPromptLength: null,
+                submittedPromptMessageId: null,
+              },
+            }
           : {}),
       }
     : sessionMeta.browser;

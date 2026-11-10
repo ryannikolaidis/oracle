@@ -1502,6 +1502,10 @@ describe("bridged result sanitization", () => {
               },
               conversationId: "abc-123",
               promptSubmitted: true,
+              submittedPromptHash: "b".repeat(64),
+              submittedPromptSha256: "a".repeat(64),
+              submittedPromptLength: 123,
+              submittedPromptMessageId: "new-message",
               chromePid: 4242,
               chromePort: 9222,
               userDataDir: "/Users/someone/.oracle/browser-profile",
@@ -1530,6 +1534,10 @@ describe("bridged result sanitization", () => {
         steps: ["Read official sources", "Compare support dates"],
         phase: "researching",
       });
+      expect(result.submittedPromptHash).toBe("b".repeat(64));
+      expect(result.submittedPromptSha256).toBe("a".repeat(64));
+      expect(result.submittedPromptLength).toBe(123);
+      expect(result.submittedPromptMessageId).toBe("new-message");
       expect(result.conversationId).toBe("abc-123");
       expect(result.tabUrl).toBe("https://chatgpt.com/c/abc-123");
 

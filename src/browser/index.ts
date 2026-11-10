@@ -1,4 +1,4 @@
-import { readSubmittedPromptFingerprint, readUserMessageIds } from "./promptFingerprint.js";
+import { readSubmittedPromptEvidence, readUserMessageIds } from "./promptFingerprint.js";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -896,6 +896,9 @@ async function runBrowserModeInternal(
   let lastUrl: string | undefined;
   let promptSubmitted = false;
   let submittedPromptHash: string | null = null;
+  let submittedPromptSha256: string | null = null;
+  let submittedPromptLength: number | null = null;
+  let submittedPromptMessageId: string | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -917,6 +920,9 @@ async function runBrowserModeInternal(
       conversationId,
       promptSubmitted,
       submittedPromptHash,
+      submittedPromptSha256,
+      submittedPromptLength,
+      submittedPromptMessageId,
       ownedRecoveryTarget,
       userDataDir,
       controllerPid: process.pid,
@@ -938,6 +944,9 @@ async function runBrowserModeInternal(
   const markPromptSubmitted = async (): Promise<void> => {
     promptSubmitted = true;
     submittedPromptHash = null;
+    submittedPromptSha256 = null;
+    submittedPromptLength = null;
+    submittedPromptMessageId = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -1227,6 +1236,9 @@ async function runBrowserModeInternal(
                     : undefined,
                 promptSubmitted,
                 submittedPromptHash,
+                submittedPromptSha256,
+                submittedPromptLength,
+                submittedPromptMessageId,
                 ownedRecoveryTarget,
                 controllerPid: process.pid,
                 researchPlan,
@@ -1655,13 +1667,16 @@ async function runBrowserModeInternal(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const renderedPromptHash = await readSubmittedPromptFingerprint(
+      const observedPrompt = await readSubmittedPromptEvidence(
         Runtime,
         previousUserMessageIds,
         config.inputTimeoutMs,
       );
-      if (renderedPromptHash) {
-        submittedPromptHash = renderedPromptHash;
+      if (observedPrompt) {
+        submittedPromptHash = observedPrompt.fingerprint;
+        submittedPromptSha256 = observedPrompt.sha256;
+        submittedPromptLength = observedPrompt.length;
+        submittedPromptMessageId = observedPrompt.messageId;
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -1831,6 +1846,9 @@ async function runBrowserModeInternal(
         conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -1936,6 +1954,9 @@ async function runBrowserModeInternal(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -2027,6 +2048,9 @@ async function runBrowserModeInternal(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -2287,6 +2311,9 @@ async function runBrowserModeInternal(
             conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
             promptSubmitted,
             submittedPromptHash,
+            submittedPromptSha256,
+            submittedPromptLength,
+            submittedPromptMessageId,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
@@ -2375,6 +2402,9 @@ async function runBrowserModeInternal(
       conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
       promptSubmitted,
       submittedPromptHash,
+      submittedPromptSha256,
+      submittedPromptLength,
+      submittedPromptMessageId,
       ownedRecoveryTarget,
       controllerPid: process.pid,
     };
@@ -2408,6 +2438,9 @@ async function runBrowserModeInternal(
         tabUrl: lastUrl,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
         ownedRecoveryTarget,
         controllerPid: process.pid,
       };
@@ -2486,6 +2519,9 @@ async function runBrowserModeInternal(
               : undefined,
           promptSubmitted,
           submittedPromptHash,
+          submittedPromptSha256,
+          submittedPromptLength,
+          submittedPromptMessageId,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -2904,6 +2940,9 @@ async function runRemoteBrowserMode(
   let lastUrl: string | undefined;
   let promptSubmitted = false;
   let submittedPromptHash: string | null = null;
+  let submittedPromptSha256: string | null = null;
+  let submittedPromptLength: number | null = null;
+  let submittedPromptMessageId: string | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -2927,6 +2966,9 @@ async function runRemoteBrowserMode(
           conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
           promptSubmitted,
           submittedPromptHash,
+          submittedPromptSha256,
+          submittedPromptLength,
+          submittedPromptMessageId,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -2947,6 +2989,9 @@ async function runRemoteBrowserMode(
   const markPromptSubmitted = async (): Promise<void> => {
     promptSubmitted = true;
     submittedPromptHash = null;
+    submittedPromptSha256 = null;
+    submittedPromptLength = null;
+    submittedPromptMessageId = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -3254,13 +3299,16 @@ async function runRemoteBrowserMode(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const renderedPromptHash = await readSubmittedPromptFingerprint(
+      const observedPrompt = await readSubmittedPromptEvidence(
         Runtime,
         previousUserMessageIds,
         config.inputTimeoutMs,
       );
-      if (renderedPromptHash) {
-        submittedPromptHash = renderedPromptHash;
+      if (observedPrompt) {
+        submittedPromptHash = observedPrompt.fingerprint;
+        submittedPromptSha256 = observedPrompt.sha256;
+        submittedPromptLength = observedPrompt.length;
+        submittedPromptMessageId = observedPrompt.messageId;
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -3392,6 +3440,9 @@ async function runRemoteBrowserMode(
         conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -3494,6 +3545,9 @@ async function runRemoteBrowserMode(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -3583,6 +3637,9 @@ async function runRemoteBrowserMode(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -3798,6 +3855,9 @@ async function runRemoteBrowserMode(
             conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
             promptSubmitted,
             submittedPromptHash,
+            submittedPromptSha256,
+            submittedPromptLength,
+            submittedPromptMessageId,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
@@ -3881,6 +3941,9 @@ async function runRemoteBrowserMode(
       conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
       promptSubmitted,
       submittedPromptHash,
+      submittedPromptSha256,
+      submittedPromptLength,
+      submittedPromptMessageId,
       ownedRecoveryTarget,
       artifacts: savedArtifacts,
       providerNativeCapture: providerCapture.summary,
@@ -3934,6 +3997,9 @@ async function runRemoteBrowserMode(
             : undefined,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,

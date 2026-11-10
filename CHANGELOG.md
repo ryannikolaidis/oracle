@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Browser: persist a SHA-256 digest, UTF-8 byte length and message identity from the observed submitted user turn, alongside the existing identity-bound fingerprint. Missing fresh DOM evidence leaves these fields null.
+
 ## 0.21.4 - 2026-10-01
 
 **Highlights:** Reliable ChatGPT Chat/Work automation and accurate provider reasoning-token accounting.
