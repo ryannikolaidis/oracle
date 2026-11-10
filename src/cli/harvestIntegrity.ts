@@ -40,7 +40,8 @@ export async function persistBrowserHarvest(
   // Harvesting can take time; compare against the latest saved capture, not the initial read.
   const meta = await sessionStore.readSession(sessionId);
   if (!meta) throw new Error(`No session found with ID ${sessionId}.`);
-  if (meta.browser?.runtime?.submittedPromptSha256 !== undefined) {
+  if (meta.browser?.config?.answerCapture === "json-code" ||
+      meta.browser?.runtime?.answerRelationship?.answerCapture === "json-code") {
     throw new Error("Session harvest lacks continuous user/assistant relationship evidence; use identity-bound reattach or inspect candidate tab data without saving session output");
   }
   const captured: BrowserHarvestIntegrity["captured"] = [];

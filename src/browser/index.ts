@@ -1,6 +1,6 @@
 import { bindSubmittedAnswer, requireAnswerBinding, type AnswerRelationship } from "./answerBinding.js";
 import { finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "./actions/assistantResponse.js";
-import { readBoundSubmittedPromptEvidence, readUserMessageIds } from "./promptFingerprint.js";
+import { readBoundSubmittedPromptEvidence, readSubmittedPromptEvidence, readUserMessageIds } from "./promptFingerprint.js";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -869,7 +869,8 @@ async function runBrowserModeInternal(
 
   let config = resolveBrowserConfig(options.config);
   const deepResearch = config.researchMode === "deep";
-  if (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
+  const strictAnswerCapture = config.answerCapture === "json-code";
+  if (strictAnswerCapture && (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0)) {
     throw new Error("Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts");
   }
   const usingCopiedProfile = Boolean(config.copyProfileSource);
@@ -881,6 +882,15 @@ async function runBrowserModeInternal(
   }
   const isResumingConversation = Boolean(config.resumeConversationUrl);
   const followUpPrompts = normalizeBrowserFollowUpPrompts(options.followUpPrompts);
+  if (deepResearch && followUpPrompts.length > 0) {
+    throw new BrowserAutomationError(
+      "Browser follow-ups are not supported with Deep Research mode. Put the full research plan into the initial prompt or run a normal browser consult for multi-turn review.",
+      {
+        stage: "browser-follow-ups",
+        details: { researchMode: "deep", followUps: followUpPrompts.length },
+      },
+    );
+  }
   const logger: BrowserLogger = options.log ?? ((_message: string) => {});
   if (logger.verbose === undefined) {
     logger.verbose = Boolean(config.debug);
@@ -1675,12 +1685,12 @@ async function runBrowserModeInternal(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const observedPrompt = await readBoundSubmittedPromptEvidence(
+      const observedPrompt = await (strictAnswerCapture ? readBoundSubmittedPromptEvidence : readSubmittedPromptEvidence)(
         Runtime,
         previousUserMessageIds,
         config.inputTimeoutMs,
       );
-      if (!observedPrompt) throw new Error("No fresh observed user turn; refusing unbound answer capture");
+      if (strictAnswerCapture && !observedPrompt) throw new Error("No fresh observed user turn; refusing unbound answer capture");
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
@@ -1688,7 +1698,7 @@ async function runBrowserModeInternal(
         submittedPromptMessageId = observedPrompt.messageId;
         submittedPromptConversationId = observedPrompt.conversationId ?? null;
         submittedPromptObservationId = observedPrompt.observationId ?? null;
-        bindSubmittedAnswer(Runtime, observedPrompt);
+        if (strictAnswerCapture) bindSubmittedAnswer(Runtime, observedPrompt);
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -2015,7 +2025,7 @@ async function runBrowserModeInternal(
       turnPrompt: string,
       label: string,
     ): Promise<BrowserConversationTurn & { answerHtml: string }> => {
-      requireAnswerBinding(Runtime);
+      if (strictAnswerCapture) requireAnswerBinding(Runtime);
       let turnAnswer: AssistantAnswer;
       try {
         await updateConversationHint("assistant-wait", 15_000).catch(() => false);
@@ -2246,14 +2256,23 @@ async function runBrowserModeInternal(
           turnAnswerMarkdown = bestText;
         }
       }
-      const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
-      answerRelationship = bound.answerRelationship;
-      answerMessageId = bound.messageId;
+      if (strictAnswerCapture) {
+        const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
+        answerRelationship = bound.answerRelationship;
+        answerMessageId = bound.messageId;
+        return {
+          label,
+          answerText: bound.text,
+          answerMarkdown: bound.markdown,
+          answerHtml: bound.html,
+        };
+      }
+      answerMessageId = turnAnswer.meta.messageId ?? undefined;
       return {
         label,
-        answerText: bound.text,
-        answerMarkdown: bound.markdown,
-        answerHtml: bound.html,
+        answerText: turnAnswerText,
+        answerMarkdown: turnAnswerMarkdown,
+        answerHtml: turnAnswerHtml,
       };
     };
 
@@ -2386,7 +2405,9 @@ async function runBrowserModeInternal(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    }
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -2398,7 +2419,9 @@ async function runBrowserModeInternal(
         imageArtifacts.savedImages.length === imageArtifacts.imageCount &&
         fileArtifacts.savedFiles.length === fileArtifacts.fileCount,
     });
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    }
     runStatus = "complete";
     const durationMs = Date.now() - startedAt;
     const answerChars = answerText.length;
@@ -2961,7 +2984,8 @@ async function runRemoteBrowserMode(
   cancellation: BrowserCancellation,
 ): Promise<BrowserRunResult> {
   const deepResearch = config.researchMode === "deep";
-  if (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0) {
+  const strictAnswerCapture = config.answerCapture === "json-code";
+  if (strictAnswerCapture && (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0)) {
     throw new Error("Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts");
   }
   const remoteChromeConfig = config.remoteChrome;
@@ -3346,12 +3370,12 @@ async function runRemoteBrowserMode(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const observedPrompt = await readBoundSubmittedPromptEvidence(
+      const observedPrompt = await (strictAnswerCapture ? readBoundSubmittedPromptEvidence : readSubmittedPromptEvidence)(
         Runtime,
         previousUserMessageIds,
         config.inputTimeoutMs,
       );
-      if (!observedPrompt) throw new Error("No fresh observed user turn; refusing unbound answer capture");
+      if (strictAnswerCapture && !observedPrompt) throw new Error("No fresh observed user turn; refusing unbound answer capture");
       if (observedPrompt) {
         submittedPromptHash = observedPrompt.fingerprint;
         submittedPromptSha256 = observedPrompt.sha256;
@@ -3359,7 +3383,7 @@ async function runRemoteBrowserMode(
         submittedPromptMessageId = observedPrompt.messageId;
         submittedPromptConversationId = observedPrompt.conversationId ?? null;
         submittedPromptObservationId = observedPrompt.observationId ?? null;
-        bindSubmittedAnswer(Runtime, observedPrompt);
+        if (strictAnswerCapture) bindSubmittedAnswer(Runtime, observedPrompt);
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -3644,7 +3668,7 @@ async function runRemoteBrowserMode(
       turnPrompt: string,
       label: string,
     ): Promise<BrowserConversationTurn & { answerHtml: string }> => {
-      requireAnswerBinding(Runtime);
+      if (strictAnswerCapture) requireAnswerBinding(Runtime);
       let turnAnswer: AssistantAnswer;
       try {
         await activeConversationUrlMonitor.update("assistant-wait", 15_000).catch(() => false);
@@ -3837,14 +3861,23 @@ async function runRemoteBrowserMode(
           turnAnswerMarkdown = bestText;
         }
       }
-      const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
-      answerRelationship = bound.answerRelationship;
-      answerMessageId = bound.messageId;
+      if (strictAnswerCapture) {
+        const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
+        answerRelationship = bound.answerRelationship;
+        answerMessageId = bound.messageId;
+        return {
+          label,
+          answerText: bound.text,
+          answerMarkdown: bound.markdown,
+          answerHtml: bound.html,
+        };
+      }
+      answerMessageId = turnAnswer.meta.messageId ?? undefined;
       return {
         label,
-        answerText: bound.text,
-        answerMarkdown: bound.markdown,
-        answerHtml: bound.html,
+        answerText: turnAnswerText,
+        answerMarkdown: turnAnswerMarkdown,
+        answerHtml: turnAnswerHtml,
       };
     };
 
@@ -3969,7 +4002,9 @@ async function runRemoteBrowserMode(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    }
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -3985,7 +4020,9 @@ async function runRemoteBrowserMode(
     const answerChars = answerText.length;
     const answerTokens = estimateTokenCount(answerMarkdown);
 
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
+    }
     runStatus = "complete";
     return {
       answerText,

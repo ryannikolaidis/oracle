@@ -4,6 +4,8 @@ import { buildConversationTurnCountExpression } from "../../src/browser/conversa
 import {
   browserPromptFingerprint,
   readSubmittedPromptFingerprint,
+  readSubmittedPromptEvidence,
+  readBoundSubmittedPromptEvidence,
   readUserMessageIds,
 } from "../../src/browser/promptFingerprint.js";
 import {
@@ -79,6 +81,15 @@ describe("ChatGPT Chat/Work semantic layout", () => {
       browserPromptFingerprint("new prompt", "stable-turn"),
     );
     expect(await readSubmittedPromptFingerprint(r, ["stable-turn"])).toBeUndefined();
+  });
+  test("ordinary prompt evidence works without a conversation URL or continuity observer", async () => {
+    const { document } = fixture();
+    const r = runtime(document);
+    const evidence = await readSubmittedPromptEvidence(r, []);
+    expect(evidence).toMatchObject({ messageId: "stable-turn", length: 10 });
+    expect(evidence?.observationId).toBeUndefined();
+    expect(evidence?.conversationId).toBeUndefined();
+    expect(await readBoundSubmittedPromptEvidence(r, [])).toBeUndefined();
   });
   test("ignores nested legacy wrappers inside the canonical new wrapper", () => {
     const { document, turn } = fixture();

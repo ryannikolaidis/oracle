@@ -68,6 +68,34 @@ describe("harvest capture identity", () => {
     return { id: meta.id, paths, transcript, body };
   }
 
+  test.each(["configured", "recorded"])("refuses json-code tab persistence with %s mode evidence even without a prompt digest", async mode => {
+    const meta = await seed("original");
+    const saved = await sessionStore.readSession(meta.id);
+    await sessionStore.updateSession(meta.id, {
+      browser: {
+        ...saved?.browser,
+        ...(mode === "configured" ? { config: { answerCapture: "json-code" as const } } : {}),
+        runtime: {
+          ...saved?.browser?.runtime,
+          ...(mode === "recorded" ? { answerRelationship: {
+            version: 1 as const,
+            relationship: "sole-assistant-after-user" as const,
+            conversationId: "original",
+            observationId: "observation",
+            userMessageId: "user",
+            userSha256: "digest",
+            userLength: 1,
+            assistantMessageId: "assistant",
+            answerTextSha256: "text-digest",
+            answerMarkdownSha256: "markdown-digest",
+            answerCapture: "json-code" as const,
+          } } : {}),
+        },
+      },
+    });
+    await expect(persistBrowserHarvest(meta.id, observed("original"))).rejects.toThrow(/lacks continuous/);
+  });
+
   test("persists both identities and refuses an implicit mismatch without replacing saved output", async () => {
     const saved = await seed("capture-a");
     await expect(persistBrowserHarvest(saved.id, observed("harvest-b"))).rejects.toMatchObject({

@@ -12,6 +12,18 @@ If you’re running Gemini, also see `docs/gemini.md`.
 
 `--preview` now works with `--engine browser`: it renders the composed prompt, lists which files would be uploaded vs inlined, and shows the bundle location when bundling is enabled, without launching Chrome.
 
+`--browser-answer-capture dom-text` is the default: ordinary Markdown capture,
+legacy session reattach and recovery, Deep Research, and supported follow-ups
+retain their normal behavior. These captures do not issue an attested relationship
+between the submitted user turn and the returned answer.
+
+Opt into `--browser-answer-capture json-code` when the answer must be one JSON
+code block with an exact payload and a continuously observed user/assistant
+relationship. This mode refuses missing or lost observation evidence, edited or
+ambiguous turns, Deep Research, follow-up transcripts, and session tab harvest.
+It disables conversation archival. Ordinary or legacy output cannot supply the
+relationship evidence required by this mode.
+
 ## Quick example: browser mode with custom cookies
 
 ```bash

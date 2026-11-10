@@ -9,7 +9,7 @@ import {
   recheckBoundAnswer,
   restoreAnswerBinding,
 } from "../../src/browser/answerBinding.js";
-import { browserPromptFingerprint, readSubmittedPromptEvidence } from "../../src/browser/promptFingerprint.js";
+import { browserPromptFingerprint, readBoundSubmittedPromptEvidence, readSubmittedPromptEvidence } from "../../src/browser/promptFingerprint.js";
 import { buildPromptObservationExpression } from "../../src/browser/promptObservation.js";
 import { FakeDocument, FakeElement } from "./domFixture.js";
 import { readStructuredAnswer } from "../../src/browser/structuredAnswer.js";
@@ -148,7 +148,12 @@ test("installs continuity observation atomically with the observed prompt read",
   const runtime = {
     evaluate: async ({ expression }: { expression: string }) => ({ result: { value: new Function("document", "location", "globalThis", "MutationObserver", "crypto", `return ${expression}`)(document, { href: "https://chatgpt.com/c/conversation-original" }, registry, Observer, { randomUUID: () => "observation-original" }) } }),
   } as unknown as ChromeClient["Runtime"];
-  expect(await readSubmittedPromptEvidence(runtime, [])).toMatchObject(receipt);
+  const ordinary = await readSubmittedPromptEvidence(runtime, []);
+  expect(ordinary?.sha256).toBe(receipt.sha256);
+  expect(ordinary?.observationId).toBeUndefined();
+  expect(observers).toHaveLength(0);
+  expect(registry.__oraclePromptObservations).toBeUndefined();
+  expect(await readBoundSubmittedPromptEvidence(runtime, [])).toMatchObject(receipt);
   expect(observers).toHaveLength(1);
 });
 

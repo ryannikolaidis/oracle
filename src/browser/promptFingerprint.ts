@@ -72,8 +72,8 @@ export async function readSubmittedPromptEvidence(
             const messageId = ${buildUserMessageIdExpression()};
             if (${JSON.stringify([...previous])}.includes(messageId)) return null;
             return {
-              observationId: typeof location === 'object' ? ${buildPromptObservationExpression()} : undefined,
-              conversationId: typeof location === 'object' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
+              observationId: ${requireContinuity ? `typeof location === 'object' ? ${buildPromptObservationExpression()} : undefined` : "undefined"},
+              conversationId: typeof location === 'object' && typeof location.href === 'string' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
               text: (user.querySelector('[data-user-message-bubble="true"]') || user).textContent,
               messageId,
             };

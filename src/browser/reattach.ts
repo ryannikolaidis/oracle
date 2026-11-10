@@ -81,9 +81,9 @@ export async function resumeBrowserSession(
   logger: BrowserLogger,
   deps: ReattachDeps = {},
 ): Promise<ReattachResult> {
-  if (!runtime.submittedPromptObservationId || !runtime.submittedPromptConversationId ||
+  if (config?.answerCapture === "json-code" && (!runtime.submittedPromptObservationId || !runtime.submittedPromptConversationId ||
       !runtime.submittedPromptMessageId || !runtime.submittedPromptSha256 ||
-      !runtime.submittedPromptHash || typeof runtime.submittedPromptLength !== "number") {
+      !runtime.submittedPromptHash || typeof runtime.submittedPromptLength !== "number")) {
     throw new Error("Session lacks a continuous observed user/conversation binding; saved legacy output is candidate data only");
   }
   const cancellation = new BrowserCancellation(deps.signal, logger);
@@ -252,12 +252,32 @@ async function resumeBrowserSessionInternal(
         expectedConversationUrl: expectedConversationUrl ?? undefined,
       }),
     );
-    restoreAnswerBinding(Runtime, runtime);
+    if (config?.answerCapture === "json-code") restoreAnswerBinding(Runtime, runtime);
     const minTurnIndex =
       (await readPromptPreviewTurnIndex(Runtime, deps.promptPreview)) ??
       (deps.promptPreview ? null : await readConversationTurnIndex(Runtime, logger));
     if (config?.researchMode === "deep") {
-      throw new Error("Deep Research iframe cannot establish the observed user/assistant relationship");
+      if (config?.answerCapture === "json-code") {
+        throw new Error("Deep Research iframe cannot establish the observed user/assistant relationship");
+      }
+      const waitForDeepResearch =
+        deps.waitForDeepResearchCompletion ?? waitForDeepResearchCompletion;
+      const researchResult = await withTimeout(
+        cancellation.call(() =>
+          waitForDeepResearch(Runtime, logger, timeoutMs, minTurnIndex ?? undefined, Page, client, {
+            requireScopedTargetOwner: true,
+          }),
+        ),
+        timeoutMs + 5_000,
+        "Reattach Deep Research response timed out",
+      );
+      const captureTarget = await captureIdentity().catch(() => undefined);
+      await closeAttached();
+      return {
+        answerText: researchResult.text,
+        answerMarkdown: researchResult.text,
+        captureTarget,
+      };
     }
     const promptEcho = buildPromptEchoMatcher(deps.promptPreview);
     const answer = await withTimeout(
@@ -276,11 +296,15 @@ async function resumeBrowserSessionInternal(
         15_000,
         "Reattach markdown capture timed out",
       )) ?? recovered.text;
-    alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
-    const bound = await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture));
+    const aligned = alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
+    const bound = config?.answerCapture === "json-code"
+      ? await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture))
+      : { text: aligned.answerText, markdown: aligned.answerMarkdown, answerRelationship: undefined };
 
     const captureTarget = await captureIdentity().catch(() => undefined);
-    await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
+    if (config?.answerCapture === "json-code") {
+      await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
+    }
     await closeAttached();
     return {
       answerText: bound.text,
@@ -506,12 +530,25 @@ async function resumeBrowserSessionViaNewChrome(
     const waitForResponse = deps.waitForAssistantResponse ?? waitForAssistantResponse;
     const captureMarkdown = deps.captureAssistantMarkdown ?? captureAssistantMarkdown;
     const timeoutMs = resolved.timeoutMs ?? 120_000;
-    restoreAnswerBinding(Runtime, runtime);
+    if (config?.answerCapture === "json-code") restoreAnswerBinding(Runtime, runtime);
     const minTurnIndex =
       (await readPromptPreviewTurnIndex(Runtime, deps.promptPreview)) ??
       (deps.promptPreview ? null : await readConversationTurnIndex(Runtime, logger));
     if (resolved.researchMode === "deep") {
-      throw new Error("Deep Research iframe cannot establish the observed user/assistant relationship");
+      if (config?.answerCapture === "json-code") {
+        throw new Error("Deep Research iframe cannot establish the observed user/assistant relationship");
+      }
+      const waitForDeepResearch =
+        deps.waitForDeepResearchCompletion ?? waitForDeepResearchCompletion;
+      const researchResult = await cancellation.call(() =>
+        waitForDeepResearch(Runtime, logger, timeoutMs, minTurnIndex ?? undefined, Page, client, {
+          requireScopedTargetOwner: true,
+        }),
+      );
+      return {
+        answerText: researchResult.text,
+        answerMarkdown: researchResult.text,
+      };
     }
     const promptEcho = buildPromptEchoMatcher(deps.promptPreview);
     const answer = await cancellation.call(() =>
@@ -523,10 +560,14 @@ async function resumeBrowserSessionViaNewChrome(
     const markdown =
       (await cancellation.call(() => captureMarkdown(Runtime, recovered.meta, logger))) ??
       recovered.text;
-    alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
-    const bound = await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture));
+    const aligned = alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
+    const bound = config?.answerCapture === "json-code"
+      ? await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture))
+      : { text: aligned.answerText, markdown: aligned.answerMarkdown, answerRelationship: undefined };
 
-    await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
+    if (config?.answerCapture === "json-code") {
+      await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
+    }
     return { answerText: bound.text, answerMarkdown: bound.markdown, answerRelationship: bound.answerRelationship };
   } finally {
     await withoutBrowserCancellation(cleanup);

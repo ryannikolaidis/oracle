@@ -231,6 +231,7 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
         runtime: {
           ...baseMeta.browser?.runtime,
           submittedPromptHash: browserPromptFingerprint(prompt, "current-message"),
+          submittedPromptSha256: "observed-default-prompt-digest",
         },
       },
     };
