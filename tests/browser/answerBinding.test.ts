@@ -1,11 +1,12 @@
 import {
   buildAssistantExtractorForTest,
   readAssistantSnapshot,
+  waitForAssistantResponse,
   captureAssistantMarkdown,
   finalizeBoundAssistantAnswer,
   verifyBoundAssistantReturn,
 } from "../../src/browser/actions/assistantResponse.js";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { ChromeClient } from "../../src/browser/types.js";
 import {
   answerDigest,
@@ -72,8 +73,12 @@ function page(initial: FakeElement[] = [user(), assistant()]) {
           "location",
           "globalThis",
           "during",
+          "HTMLElement",
+          "window",
           `return ${expression}`,
-        )(document, location, global, () => during?.()),
+        )(document, location, global, () => during?.(), FakeElement, {
+          getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+        }),
       },
     }),
   } as unknown as ChromeClient["Runtime"];
@@ -693,6 +698,95 @@ test.each(["message-id", "turn-key"])(
     const result = await finalizeBoundAssistantAnswer(p.runtime, () => {}, "json-code");
     expect(result.text).toBe('{"ok":true}');
     expect(result.answerRelationship.assistantMessageId).toBe("answer-original");
+  },
+);
+
+test.each([
+  { identity: "own", recover: false },
+  { identity: "ancestor", recover: false },
+  { identity: "own", recover: true },
+  { identity: "ancestor", recover: true },
+])(
+  "strict turn-key $identity identity survives waiting and capture (recovery: $recover)",
+  async ({ identity, recover }) => {
+    vi.useFakeTimers();
+    try {
+      const text = ' {"review":"Hé😀", "ok":true}\n';
+      const answer = jsonAssistant(text);
+      const message = new FakeElement(
+        "article",
+        {
+          "data-turn": "assistant",
+          ...(identity === "own" ? { "data-turn-key": "answer-original" } : {}),
+        },
+        [...answer.message.children],
+      );
+      const observed = user();
+      observed.setAttribute("data-turn-key", receipt.messageId);
+      // Completion controls live outside the answer body, in its enclosing turn.
+      const exchange = new FakeElement("div", { "data-turn-key": "answer-original" }, [
+        message,
+        new FakeElement("button", { "data-testid": "copy-turn-action-button" }),
+      ]);
+      const p = page([observed, exchange]);
+      if (recover)
+        restoreAnswerBinding(p.runtime, {
+          submittedPromptHash: receipt.fingerprint,
+          submittedPromptSha256: receipt.sha256,
+          submittedPromptLength: receipt.length,
+          submittedPromptMessageId: receipt.messageId,
+          submittedPromptConversationId: receipt.conversationId,
+          submittedPromptObservationId: receipt.observationId,
+        });
+      const evaluate = p.runtime.evaluate.bind(p.runtime);
+      let observerFailed = false;
+      p.runtime.evaluate = async (params) => {
+        if (recover && !observerFailed && params.expression.includes("const SELECTORS =")) {
+          observerFailed = true;
+          throw new Error("observer evaluation interrupted");
+        }
+        return evaluate(params);
+      };
+      const logs: string[] = [];
+      const waiting = waitForAssistantResponse(
+        p.runtime,
+        20_000,
+        (line) => logs.push(line),
+        1,
+        receipt.conversationId,
+      );
+      const waited = expect(waiting).resolves.toMatchObject({
+        text: text.trim(),
+        meta: { messageId: "answer-original" },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await waited;
+      const response = await waiting;
+      expect(observerFailed).toBe(recover);
+      if (recover)
+        expect(logs).toContain("Recovered and confirmed assistant response via polling fallback");
+      expect(await captureAssistantMarkdown(p.runtime, response.meta, () => {})).toBe(text);
+      const result = await finalizeBoundAssistantAnswer(p.runtime, () => {}, "json-code");
+      expect(result.text).toBe(text);
+      expect(result.markdown).toBe(text);
+      expect(result.answerRelationship).toMatchObject({
+        assistantMessageId: "answer-original",
+        answerTextSha256: answerDigest(text),
+        answerMarkdownSha256: answerDigest(text),
+        answerCapture: "json-code",
+      });
+      await expect(verifyBoundAssistantReturn(p.runtime, text, text, "json-code")).resolves.toEqual(
+        result.answerRelationship,
+      );
+      // Recovery never recreates continuity after the original observation is lost.
+      p.registry.clear();
+      await expect(readAssistantSnapshot(p.runtime)).rejects.toThrow(
+        /observation lost or invalidated/,
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   },
 );
 

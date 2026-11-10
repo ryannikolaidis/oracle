@@ -19,6 +19,7 @@ import {
   STOP_BUTTON_SELECTORS,
 } from "../constants.js";
 import {
+  buildAssistantMessageIdExpression,
   buildConversationTurnListExpression,
   buildLastAssistantMessageExpression,
 } from "../conversationTurns.js";
@@ -928,7 +929,7 @@ function buildCompletionVisibilityExpression(
         ...Array.from(lastAssistantTurn.querySelectorAll('[data-message-id], [data-testid], [data-content-search-unit-key], [data-chatgpt-search-unit-key], [data-turn-key]')),
       ];
       const identityMatches = identityNodes.some((node) =>
-        (EXPECTED_MESSAGE_ID && (node.getAttribute?.('data-message-id') || node.getAttribute?.('data-chatgpt-selection-message-id') || node.getAttribute?.('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute?.('data-content-search-unit-key') || node.getAttribute?.('data-chatgpt-search-unit-key')) === EXPECTED_MESSAGE_ID) ||
+        (EXPECTED_MESSAGE_ID && ${buildAssistantMessageIdExpression()} === EXPECTED_MESSAGE_ID) ||
         (EXPECTED_TURN_ID && (node.getAttribute?.('data-turn-key') || node.getAttribute?.('data-testid')) === EXPECTED_TURN_ID),
       );
       if (!identityMatches) return false;
@@ -1441,7 +1442,7 @@ function buildAssistantExtractor(functionName: string): string {
         .map(node => node.getAttribute('aria-label').slice('Open preview of '.length));
       const text = innerText.trim().length > 0 ? innerText : textContent.trim().length > 0 ? textContent : fileNames.join('\\n');
       const html = fileNames.length > 0 ? messageRoot.innerHTML : contentRoot?.innerHTML ?? '';
-      const messageId = messageRoot.getAttribute('data-message-id') || messageRoot.getAttribute?.('data-chatgpt-selection-message-id') || messageRoot.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || messageRoot.getAttribute('data-content-search-unit-key') || messageRoot.getAttribute('data-chatgpt-search-unit-key');
+      const messageId = ${buildAssistantMessageIdExpression("messageRoot")};
       const turnId = turn.getAttribute('data-turn-key') || messageRoot.getAttribute('data-testid');
       const generatedImages = Array.from(messageRoot.querySelectorAll('img')).filter((img) =>
         String(img?.src || '').includes('/backend-api/estuary/content?id=file_')

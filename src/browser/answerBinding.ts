@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
 import { browserPromptFingerprint, type SubmittedPromptEvidence } from "./promptFingerprint.js";
 import {
+  buildAssistantMessageIdExpression,
   buildConversationTurnListExpression,
   buildUserMessageIdExpression,
 } from "./conversationTurns.js";
@@ -82,7 +83,7 @@ export function requireAnswerBinding(runtime: ChromeClient["Runtime"]): void {
 /** One synchronous DOM read: unknown, duplicated or unmounted relationships are refused. */
 export function buildAnswerRelationshipExpression(): string {
   return `(() => {
-    const id = node => node?.getAttribute('data-message-id') || node?.getAttribute('data-chatgpt-selection-message-id') || node?.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || node?.getAttribute('data-content-search-unit-key') || node?.getAttribute('data-chatgpt-search-unit-key') || node?.closest('[data-turn-key]')?.getAttribute('data-turn-key');
+    const id = node => ${buildAssistantMessageIdExpression()};
     const userSelector = ':is([data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"])';
     const assistantSelector = ${JSON.stringify(ASSISTANT_ROLE_SELECTOR)};
     const turns = ${buildConversationTurnListExpression()};

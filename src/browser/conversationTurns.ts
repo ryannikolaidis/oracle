@@ -41,3 +41,8 @@ export function buildConversationTurnCountExpression(rootExpression = "document"
 export function buildUserMessageIdExpression(node = "user"): string {
   return `(${node}?.getAttribute('data-message-id') || ${node}?.getAttribute('data-chatgpt-selection-message-id') || ${node}?.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || ${node}?.closest('[data-turn-key]')?.getAttribute('data-turn-key') || ${node}?.getAttribute('data-content-search-unit-key') || ${node}?.getAttribute('data-chatgpt-search-unit-key'))`;
 }
+
+/** Preserve assistant identity precedence across capture, binding and recovery. */
+export function buildAssistantMessageIdExpression(node = "node"): string {
+  return `(${node}?.getAttribute('data-message-id') || ${node}?.getAttribute('data-chatgpt-selection-message-id') || ${node}?.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || ${node}?.getAttribute('data-content-search-unit-key') || ${node}?.getAttribute('data-chatgpt-search-unit-key') || ${node}?.closest('[data-turn-key]')?.getAttribute('data-turn-key'))`;
+}

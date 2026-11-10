@@ -4,6 +4,7 @@ import {
   requireAnswerBinding,
 } from "./answerBinding.js";
 import { ASSISTANT_ROLE_SELECTOR } from "./constants.js";
+import { buildAssistantMessageIdExpression } from "./conversationTurns.js";
 import type { ChromeClient } from "./types.js";
 
 /** Runs in the page. Unknown layouts fail closed instead of guessing which text is data. */
@@ -155,7 +156,7 @@ export function buildStructuredAnswerExpression(): string {
     const messageId = relationship.assistantIds[0];
     const nodes = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_ROLE_SELECTOR)}));
     const matches = nodes.filter(node => {
-      const id = node.getAttribute('data-message-id') || node.getAttribute('data-chatgpt-selection-message-id') || node.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute('data-content-search-unit-key') || node.getAttribute('data-chatgpt-search-unit-key') || node.closest('[data-turn-key]')?.getAttribute('data-turn-key');
+      const id = ${buildAssistantMessageIdExpression()};
       return id === messageId;
     });
     if (matches.length !== 1) throw new Error('Structured answer has no unique assistant root');
