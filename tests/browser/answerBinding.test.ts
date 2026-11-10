@@ -12,6 +12,7 @@ import {
 import { browserPromptFingerprint, readSubmittedPromptEvidence } from "../../src/browser/promptFingerprint.js";
 import { buildPromptObservationExpression } from "../../src/browser/promptObservation.js";
 import { FakeDocument, FakeElement } from "./domFixture.js";
+import { readStructuredAnswer } from "../../src/browser/structuredAnswer.js";
 
 const prompt = "  Hé😀\r\n\tReview this exact source  ";
 const normalized = prompt.replace(/\r\n?/g, "\n");
@@ -301,4 +302,62 @@ test("image extractor keeps synthetic completion text separate from bound assist
   const snapshot = new Function("document", "HTMLElement",
     `${buildAssistantExtractorForTest("capture")}; return capture();`)(document, FakeElement);
   expect(snapshot).toMatchObject({ text: "Generated image.", contentText: "", messageId: "answer-original" });
+});
+
+function jsonAssistant(text: string, id = "answer-original") {
+  const code = new FakeElement("code", { class: "language-json" }, [], text);
+  const pre = new FakeElement("pre", {}, [code]);
+  const message = new FakeElement("div", {
+    "data-message-author-role": "assistant", "data-message-id": id,
+  }, [new FakeElement("div", { class: "markdown" }, [pre])]);
+  return { message, pre, code };
+}
+
+test("structured finalization hashes exact returned code bytes and never evaluates clipboard capture", async () => {
+  const text = ' {"review":"Hé😀 [link](https://example.com) `code`\\n```ts\\nx\\n```"}\n';
+  const answer = jsonAssistant(text);
+  const p = page([jsonAssistant('{"old":true}', "old-answer").message, user(), answer.message]);
+  const evaluate = p.runtime.evaluate.bind(p.runtime);
+  const expressions: string[] = [];
+  p.runtime.evaluate = async params => {
+    expressions.push(params.expression);
+    return evaluate(params);
+  };
+  const result = await finalizeBoundAssistantAnswer(p.runtime, () => {}, "json-code");
+  expect(result.text).toBe(text);
+  expect(result.markdown).toBe(text);
+  expect(result.answerRelationship).toMatchObject({
+    answerCapture: "json-code", assistantMessageId: "answer-original",
+    answerTextSha256: answerDigest(text), answerMarkdownSha256: answerDigest(text),
+  });
+  await expect(verifyBoundAssistantReturn(p.runtime, text, text, "json-code")).resolves.toEqual(result.answerRelationship);
+  expect(expressions.every(expression => !expression.includes("navigator.clipboard") && !expression.includes("writeText"))).toBe(true);
+  await expect(verifyBoundAssistantReturn(p.runtime, text.trim(), text.trim(), "json-code")).rejects.toThrow(/changed/);
+  answer.code.remove();
+  answer.pre.append(new FakeElement("code", { class: "language-json" }, [], '{"changed":true}'));
+  await expect(verifyBoundAssistantReturn(p.runtime, text, text, "json-code")).rejects.toThrow(/changed/);
+});
+
+test.each(["edited user", "lost observation", "intervening user", "second assistant", "mixed layout"])(
+  "structured return refuses %s even when JSON remains valid", async failure => {
+    const text = '{"review":"valid JSON"}';
+    const answer = jsonAssistant(text);
+    const p = page([user(), answer.message]);
+    const result = await finalizeBoundAssistantAnswer(p.runtime, () => {}, "json-code");
+    if (failure === "edited user") {
+      p.document.body.children[0]!.remove();
+      p.document.body.children.unshift(user("edited"));
+    } else if (failure === "lost observation") p.registry.clear();
+    else if (failure === "intervening user") p.document.body.append(user("new", "later-user"));
+    else if (failure === "second assistant") p.document.body.append(jsonAssistant(text, "second-answer").message);
+    else answer.message.append(new FakeElement("div", {}, [], "extra prose"));
+    await expect(verifyBoundAssistantReturn(p.runtime, result.text, result.markdown, "json-code")).rejects.toThrow();
+  },
+);
+
+test("structured reader refuses unbound utilities and duplicate matching assistant roots", async () => {
+  const runtime = { evaluate: async () => { throw new Error("must not read DOM"); } } as unknown as ChromeClient["Runtime"];
+  await expect(readStructuredAnswer(runtime)).rejects.toThrow(/Cannot establish/);
+  const p = page([user(), jsonAssistant("{}").message, jsonAssistant("{}").message]);
+  await expect(readStructuredAnswer(p.runtime)).rejects.toThrow();
 });

@@ -277,10 +277,10 @@ async function resumeBrowserSessionInternal(
         "Reattach markdown capture timed out",
       )) ?? recovered.text;
     alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
-    const bound = await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger));
+    const bound = await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture));
 
     const captureTarget = await captureIdentity().catch(() => undefined);
-    await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown));
+    await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
     await closeAttached();
     return {
       answerText: bound.text,
@@ -524,9 +524,9 @@ async function resumeBrowserSessionViaNewChrome(
       (await cancellation.call(() => captureMarkdown(Runtime, recovered.meta, logger))) ??
       recovered.text;
     alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
-    const bound = await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger));
+    const bound = await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture));
 
-    await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown));
+    await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
     return { answerText: bound.text, answerMarkdown: bound.markdown, answerRelationship: bound.answerRelationship };
   } finally {
     await withoutBrowserCancellation(cleanup);

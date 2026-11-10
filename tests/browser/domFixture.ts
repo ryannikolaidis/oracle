@@ -20,6 +20,17 @@ export class FakeElement {
     return this.children.length;
   }
 
+  get nodeType(): number { return 1; }
+
+  get parentNode(): FakeElement | null { return this.parentElement; }
+
+  get childNodes(): Array<FakeElement | { nodeType: number; textContent: string; parentNode: FakeElement }> {
+    return [
+      ...(this.ownText ? [{ nodeType: 3, textContent: this.ownText, parentNode: this }] : []),
+      ...this.children,
+    ];
+  }
+
   get classList() {
     return {
       contains: (value: string) => (this.getAttribute("class") ?? "").split(/\s+/).includes(value),

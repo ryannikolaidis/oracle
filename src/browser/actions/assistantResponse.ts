@@ -1,3 +1,4 @@
+import { readStructuredAnswer } from "../structuredAnswer.js";
 import { evaluateBoundAnswer, hasAnswerBinding, requireAnswerBinding, recordBoundAnswer, recheckBoundAnswer } from "../answerBinding.js";
 import type { ChromeClient, BrowserLogger } from "../types.js";
 import {
@@ -1891,20 +1892,28 @@ function cleanAssistantText(text: string): string {
     .trim();
 }
 
+type AnswerCaptureMode = "dom-text" | "json-code";
+
+async function readFinalAnswerSnapshot(Runtime: ChromeClient["Runtime"], mode: AnswerCaptureMode): Promise<AssistantSnapshot | null> {
+  if (mode === "json-code") return readStructuredAnswer(Runtime);
+  if (mode === "dom-text") return readAssistantSnapshot(Runtime);
+  throw new Error("Unknown bound answer capture mode");
+}
+
 /** Discard recovery candidates in favor of a fresh, identity-bound final capture. */
-export async function finalizeBoundAssistantAnswer(Runtime: ChromeClient["Runtime"], _logger: BrowserLogger) {
+export async function finalizeBoundAssistantAnswer(Runtime: ChromeClient["Runtime"], _logger: BrowserLogger, mode: AnswerCaptureMode = "dom-text") {
   requireAnswerBinding(Runtime);
-  const snapshot = await readAssistantSnapshot(Runtime);
+  const snapshot = await readFinalAnswerSnapshot(Runtime, mode);
   if (!snapshot?.text || !snapshot.messageId) throw new Error("No identifiable assistant answer for observed user turn");
   const text = snapshot.contentText ?? snapshot.text;
   const answerMarkdown = text;
-  recordBoundAnswer(Runtime, snapshot, text, answerMarkdown);
-  const fresh = await readAssistantSnapshot(Runtime);
+  recordBoundAnswer(Runtime, snapshot, text, answerMarkdown, mode);
+  const fresh = await readFinalAnswerSnapshot(Runtime, mode);
   const answerRelationship = recheckBoundAnswer(Runtime, fresh, text, answerMarkdown);
   return { text, markdown: answerMarkdown, html: snapshot.html ?? "", messageId: snapshot.messageId, answerRelationship };
 }
 
-export async function verifyBoundAssistantReturn(Runtime: ChromeClient["Runtime"], text: string, markdown: string) {
+export async function verifyBoundAssistantReturn(Runtime: ChromeClient["Runtime"], text: string, markdown: string, mode: AnswerCaptureMode = "dom-text") {
   requireAnswerBinding(Runtime);
-  return recheckBoundAnswer(Runtime, await readAssistantSnapshot(Runtime), text, markdown);
+  return recheckBoundAnswer(Runtime, await readFinalAnswerSnapshot(Runtime, mode), text, markdown);
 }

@@ -68,6 +68,7 @@ export interface BrowserConfigDefaults {
   researchMode?: BrowserResearchMode;
   /** Archive completed ChatGPT conversations after local artifacts are saved. */
   archiveConversations?: BrowserArchiveMode;
+  answerCapture?: "dom-text" | "json-code";
   /** Skip cookie sync and reuse a persistent automation profile (waits for manual ChatGPT login). */
   manualLogin?: boolean;
   /** Manual-login profile directory override (also available via ORACLE_BROWSER_PROFILE_DIR). */
@@ -312,6 +313,7 @@ function sanitizeProjectConfig(config: UserConfig): UserConfig {
       "thinkingTime",
       "researchMode",
       "archiveConversations",
+      "answerCapture",
       "manualLogin",
     ];
 

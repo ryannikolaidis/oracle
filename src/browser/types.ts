@@ -133,6 +133,8 @@ export interface BrowserAutomationConfig {
   researchMode?: BrowserResearchMode;
   /** Archive completed ChatGPT conversations after local artifacts are saved. */
   archiveConversations?: BrowserArchiveMode;
+  /** Literal JSON code-body capture; dom-text retains the legacy rendered representation. */
+  answerCapture?: "dom-text" | "json-code";
   /** Existing ChatGPT conversation URL to open before submitting the prompt. */
   resumeConversationUrl?: string | null;
   /** Capture ChatGPT's own conversation document plus independent per-turn digests. */

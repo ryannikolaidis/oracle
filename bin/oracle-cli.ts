@@ -163,6 +163,7 @@ interface CliOptions extends OptionValues {
   browserThinkingTime?: "light" | "standard" | "extended" | "extra-high" | "pro" | "heavy";
   browserCaptureProviderNative?: boolean;
   browserResearch?: "off" | "search" | "deep";
+  browserAnswerCapture?: "dom-text" | "json-code";
   browserFollowUp?: string[];
   browserAllowCookieErrors?: boolean;
   browserAttachments?: string;
@@ -843,6 +844,12 @@ program
     "Save ChatGPT’s full conversation record and independent text digests as private session artifacts (opt-in; includes prior turns).",
   )
   .option("--no-browser-capture-provider-native", "Disable provider-native evidence capture.")
+  .addOption(
+    new Option(
+      "--browser-answer-capture <mode>",
+      "Bound answer representation: dom-text reads rendered text; json-code requires one literal JSON code block and disables archival.",
+    ).choices(["dom-text", "json-code"]),
+  )
   .addOption(
     new Option(
       "--browser-archive <mode>",

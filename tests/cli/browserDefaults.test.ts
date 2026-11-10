@@ -10,6 +10,16 @@ import { buildBrowserConfig } from "../../src/cli/browserConfig.js";
 const source = (_key: keyof BrowserDefaultsOptions) => undefined;
 
 describe("applyBrowserDefaultsFromConfig", () => {
+  test("preserves configured JSON capture and honors an explicit rendered-text override", async () => {
+    const options: BrowserDefaultsOptions = {};
+    const config: UserConfig = { browser: { answerCapture: "json-code" } };
+    applyBrowserDefaultsFromConfig(options, config, source);
+    expect((await buildBrowserConfig({ ...options, model: "gpt-5.4-pro" })).answerCapture).toBe("json-code");
+    options.browserAnswerCapture = "dom-text";
+    applyBrowserDefaultsFromConfig(options, config, () => "cli");
+    expect(options.browserAnswerCapture).toBe("dom-text");
+  });
+
   test("applies provider evidence preference while respecting explicit opt-out", async () => {
     const options: BrowserDefaultsOptions = {};
     const config: UserConfig = { browser: { captureProviderNative: true } };

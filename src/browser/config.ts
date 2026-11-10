@@ -68,6 +68,7 @@ export const DEFAULT_BROWSER_CONFIG: ResolvedBrowserConfig = {
   manualLoginCookieSync: false,
   researchMode: "off",
   archiveConversations: "auto",
+  answerCapture: "dom-text",
   resumeConversationUrl: null,
   captureProviderNative: false,
 };
@@ -103,7 +104,15 @@ export function resolveBrowserConfig(
     process.env.ORACLE_BROWSER_PROFILE_DIR,
   );
   const researchMode = normalizeResearchMode(config?.researchMode);
-  const archiveConversations = normalizeArchiveMode(config?.archiveConversations);
+  const answerCapture = config?.answerCapture ?? "dom-text";
+  if (answerCapture !== "dom-text" && answerCapture !== "json-code") {
+    throw new Error("Invalid browser answer capture: use dom-text or json-code");
+  }
+  if (answerCapture === "json-code" && config?.archiveConversations === "always") {
+    throw new Error("JSON code capture requires archive=never; archive=always is incompatible");
+  }
+  const archiveConversations = answerCapture === "json-code"
+    ? "never" : normalizeArchiveMode(config?.archiveConversations);
   const defaultTimeoutMs =
     researchMode === "deep" ? DEEP_RESEARCH_DEFAULT_TIMEOUT_MS : DEFAULT_BROWSER_CONFIG.timeoutMs;
   return {
@@ -156,6 +165,7 @@ export function resolveBrowserConfig(
     thinkingTime: config?.thinkingTime,
     researchMode,
     archiveConversations,
+    answerCapture,
     resumeConversationUrl:
       config?.resumeConversationUrl ?? DEFAULT_BROWSER_CONFIG.resumeConversationUrl,
     captureProviderNative:

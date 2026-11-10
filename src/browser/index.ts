@@ -2255,7 +2255,7 @@ async function runBrowserModeInternal(
           turnAnswerMarkdown = bestText;
         }
       }
-      const bound = await finalizeBoundAssistantAnswer(Runtime, logger);
+      const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
       answerRelationship = bound.answerRelationship;
       answerMessageId = bound.messageId;
       return {
@@ -2395,7 +2395,7 @@ async function runBrowserModeInternal(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -2407,7 +2407,7 @@ async function runBrowserModeInternal(
         imageArtifacts.savedImages.length === imageArtifacts.imageCount &&
         fileArtifacts.savedFiles.length === fileArtifacts.fileCount,
     });
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
     runStatus = "complete";
     const durationMs = Date.now() - startedAt;
     const answerChars = answerText.length;
@@ -3846,7 +3846,7 @@ async function runRemoteBrowserMode(
           turnAnswerMarkdown = bestText;
         }
       }
-      const bound = await finalizeBoundAssistantAnswer(Runtime, logger);
+      const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
       answerRelationship = bound.answerRelationship;
       answerMessageId = bound.messageId;
       return {
@@ -3978,7 +3978,7 @@ async function runRemoteBrowserMode(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -3994,7 +3994,7 @@ async function runRemoteBrowserMode(
     const answerChars = answerText.length;
     const answerTokens = estimateTokenCount(answerMarkdown);
 
-    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown);
+    answerRelationship = await verifyBoundAssistantReturn(Runtime, answerText, answerMarkdown, config.answerCapture);
     runStatus = "complete";
     return {
       answerText,

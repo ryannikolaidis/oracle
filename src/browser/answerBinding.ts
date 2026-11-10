@@ -15,6 +15,8 @@ export interface AnswerRelationship {
   assistantMessageId: string;
   answerTextSha256: string;
   answerMarkdownSha256: string;
+  /** Additive representation marker; absent on older receipts. */
+  answerCapture?: "dom-text" | "json-code";
 }
 
 type Binding = SubmittedPromptEvidence & { conversationId: string; observationId: string };
@@ -144,6 +146,7 @@ export function recordBoundAnswer(
   snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null },
   answerText: string,
   answerMarkdown: string,
+  answerCapture: "dom-text" | "json-code" = "dom-text",
 ): AnswerRelationship {
   requireAnswerBinding(runtime);
   const binding = bindings.get(runtime)!;
@@ -159,6 +162,7 @@ export function recordBoundAnswer(
     assistantMessageId: snapshot.messageId,
     answerTextSha256: answerDigest(answerText),
     answerMarkdownSha256: answerDigest(answerMarkdown),
+    answerCapture,
   };
   Object.freeze(evidence);
   finalized.set(runtime, { snapshot: JSON.stringify([snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]), evidence });
