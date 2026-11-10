@@ -153,6 +153,7 @@ function recordedAnswer(tag = "div") {
   const content = envelope.querySelector('[data-markdown-text-style="assistant-message"]')!;
   expect(envelope.querySelector("h4")?.textContent).toBe("ChatGPT said:");
   expect(content.textContent).toBe("OK");
+  // oxlint-disable-next-line unicorn/no-useless-spread -- remove mutates the children collection.
   for (const child of [...content.children]) child.remove();
   content.append(block());
   if (tag === "article")
