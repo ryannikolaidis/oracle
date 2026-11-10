@@ -111,8 +111,8 @@ export function resolveBrowserConfig(
   if (answerCapture === "json-code" && config?.archiveConversations === "always") {
     throw new Error("JSON code capture requires archive=never; archive=always is incompatible");
   }
-  const archiveConversations = answerCapture === "json-code"
-    ? "never" : normalizeArchiveMode(config?.archiveConversations);
+  const archiveConversations =
+    answerCapture === "json-code" ? "never" : normalizeArchiveMode(config?.archiveConversations);
   const defaultTimeoutMs =
     researchMode === "deep" ? DEEP_RESEARCH_DEFAULT_TIMEOUT_MS : DEFAULT_BROWSER_CONFIG.timeoutMs;
   return {

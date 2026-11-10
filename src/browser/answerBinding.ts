@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
 import { browserPromptFingerprint, type SubmittedPromptEvidence } from "./promptFingerprint.js";
-import { buildConversationTurnListExpression, buildUserMessageIdExpression } from "./conversationTurns.js";
+import {
+  buildConversationTurnListExpression,
+  buildUserMessageIdExpression,
+} from "./conversationTurns.js";
 import { ASSISTANT_ROLE_SELECTOR } from "./constants.js";
 
 export interface AnswerRelationship {
@@ -24,23 +27,45 @@ const poisoned = new WeakSet<ChromeClient["Runtime"]>();
 const bindings = new WeakMap<ChromeClient["Runtime"], Binding>();
 // JSON capture revalidates its complete layout on each read. Its payload and identity
 // are stable evidence; accepted code-header labels are presentation only.
-function snapshotKey(snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null }, mode: "dom-text" | "json-code" = "dom-text"): string {
-  return JSON.stringify(mode === "json-code"
-    ? [snapshot.messageId, snapshot.text]
-    : [snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html]);
+function snapshotKey(
+  snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null },
+  mode: "dom-text" | "json-code" = "dom-text",
+): string {
+  return JSON.stringify(
+    mode === "json-code"
+      ? [snapshot.messageId, snapshot.text]
+      : [snapshot.messageId, snapshot.text, snapshot.contentText, snapshot.html],
+  );
 }
 
-const finalized = new WeakMap<ChromeClient["Runtime"], { snapshot: string; evidence: AnswerRelationship }>();
-export const answerDigest = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
+const finalized = new WeakMap<
+  ChromeClient["Runtime"],
+  { snapshot: string; evidence: AnswerRelationship }
+>();
+export const answerDigest = (text: string): string =>
+  createHash("sha256").update(text, "utf8").digest("hex");
 
-export function bindSubmittedAnswer(runtime: ChromeClient["Runtime"], prompt: SubmittedPromptEvidence): void {
+export function bindSubmittedAnswer(
+  runtime: ChromeClient["Runtime"],
+  prompt: SubmittedPromptEvidence,
+): void {
   finalized.delete(runtime);
   poisoned.delete(runtime);
   bindings.delete(runtime);
-  if (!prompt.conversationId || !prompt.messageId || !prompt.sha256 || !prompt.fingerprint || !prompt.observationId) {
+  if (
+    !prompt.conversationId ||
+    !prompt.messageId ||
+    !prompt.sha256 ||
+    !prompt.fingerprint ||
+    !prompt.observationId
+  ) {
     throw new Error("Cannot bind answer: missing observed user/conversation identity or digest");
   }
-  bindings.set(runtime, { ...prompt, conversationId: prompt.conversationId, observationId: prompt.observationId });
+  bindings.set(runtime, {
+    ...prompt,
+    conversationId: prompt.conversationId,
+    observationId: prompt.observationId,
+  });
 }
 
 export function hasAnswerBinding(runtime: ChromeClient["Runtime"]): boolean {
@@ -48,8 +73,10 @@ export function hasAnswerBinding(runtime: ChromeClient["Runtime"]): boolean {
 }
 
 export function requireAnswerBinding(runtime: ChromeClient["Runtime"]): void {
-  if (poisoned.has(runtime)) throw new Error("Observed turn changed during capture; answer binding is invalidated");
-  if (!bindings.has(runtime)) throw new Error("Cannot establish answer relationship to the observed user turn");
+  if (poisoned.has(runtime))
+    throw new Error("Observed turn changed during capture; answer binding is invalidated");
+  if (!bindings.has(runtime))
+    throw new Error("Cannot establish answer relationship to the observed user turn");
 }
 
 /** One synchronous DOM read: unknown, duplicated or unmounted relationships are refused. */
@@ -91,19 +118,32 @@ type RelationshipRead = {
   roles?: string[];
 };
 
-function validate(binding: Binding, read: RelationshipRead | undefined, messageId?: string | null): void {
+function validate(
+  binding: Binding,
+  read: RelationshipRead | undefined,
+  messageId?: string | null,
+): void {
   const text = read?.userText?.replace(/\r\n?/g, "\n");
-  if (!read || read.conversationId !== binding.conversationId ||
-      read.userMessageId !== binding.messageId ||
-      read.userIds?.filter(id => id === binding.messageId).length !== 1 ||
-      typeof text !== "string" || answerDigest(text) !== binding.sha256 ||
-      Buffer.byteLength(text, "utf8") !== binding.length ||
-      browserPromptFingerprint(text, binding.messageId) !== binding.fingerprint ||
-      !Array.isArray(read.roles) || read.roles.some(role => role !== "assistant") ||
-      !Array.isArray(read.assistantIds) || read.assistantIds.length > 1 ||
-      read.assistantIds.some(id => typeof id !== "string" || !id.trim()) ||
-      (messageId !== undefined && (!messageId || read.assistantIds.length !== 1 || read.assistantIds[0] !== messageId))) {
-    throw new Error("Answer binding rejected: conversation/user changed, edited, missing, intervening or ambiguous turn, or unrelated assistant");
+  if (
+    !read ||
+    read.conversationId !== binding.conversationId ||
+    read.userMessageId !== binding.messageId ||
+    read.userIds?.filter((id) => id === binding.messageId).length !== 1 ||
+    typeof text !== "string" ||
+    answerDigest(text) !== binding.sha256 ||
+    Buffer.byteLength(text, "utf8") !== binding.length ||
+    browserPromptFingerprint(text, binding.messageId) !== binding.fingerprint ||
+    !Array.isArray(read.roles) ||
+    read.roles.some((role) => role !== "assistant") ||
+    !Array.isArray(read.assistantIds) ||
+    read.assistantIds.length > 1 ||
+    read.assistantIds.some((id) => typeof id !== "string" || !id.trim()) ||
+    (messageId !== undefined &&
+      (!messageId || read.assistantIds.length !== 1 || read.assistantIds[0] !== messageId))
+  ) {
+    throw new Error(
+      "Answer binding rejected: conversation/user changed, edited, missing, intervening or ambiguous turn, or unrelated assistant",
+    );
   }
 }
 
@@ -131,13 +171,20 @@ export async function evaluateBoundAnswer(
   });
   const envelope = response.result?.value;
   try {
-    if (envelope?.observationValid !== true) throw new Error("Original user-turn observation lost or invalidated; cannot establish answer relationship after navigation/recovery");
+    if (envelope?.observationValid !== true)
+      throw new Error(
+        "Original user-turn observation lost or invalidated; cannot establish answer relationship after navigation/recovery",
+      );
     validate(binding, envelope?.before);
     validate(binding, envelope?.after);
-    const selectedId = messageId !== undefined ? messageId :
-      envelope.value == null ? undefined :
-        typeof envelope.value === "object" && typeof envelope.value.text === "string"
-          ? envelope.value.messageId ?? null : null;
+    const selectedId =
+      messageId !== undefined
+        ? messageId
+        : envelope.value == null
+          ? undefined
+          : typeof envelope.value === "object" && typeof envelope.value.text === "string"
+            ? (envelope.value.messageId ?? null)
+            : null;
     if (selectedId !== undefined) {
       if (messageId !== undefined) validate(binding, envelope?.before, selectedId);
       validate(binding, envelope?.after, selectedId);
@@ -179,32 +226,50 @@ export function recordBoundAnswer(
 
 export function recheckBoundAnswer(
   runtime: ChromeClient["Runtime"],
-  snapshot: { text?: string; contentText?: string; html?: string; messageId?: string | null } | null,
+  snapshot: {
+    text?: string;
+    contentText?: string;
+    html?: string;
+    messageId?: string | null;
+  } | null,
   answerText: string,
   answerMarkdown: string,
 ): AnswerRelationship {
   const saved = finalized.get(runtime);
-  if (!saved || !snapshot ||
-      saved.snapshot !== snapshotKey(snapshot, saved.evidence.answerCapture) ||
-      saved.evidence.answerTextSha256 !== answerDigest(answerText) ||
-      saved.evidence.answerMarkdownSha256 !== answerDigest(answerMarkdown)) {
+  if (
+    !saved ||
+    !snapshot ||
+    saved.snapshot !== snapshotKey(snapshot, saved.evidence.answerCapture) ||
+    saved.evidence.answerTextSha256 !== answerDigest(answerText) ||
+    saved.evidence.answerMarkdownSha256 !== answerDigest(answerMarkdown)
+  ) {
     throw new Error("Answer changed after relationship verification; refusing successful return");
   }
   return saved.evidence;
 }
 
-export function restoreAnswerBinding(runtime: ChromeClient["Runtime"], metadata: {
-  submittedPromptHash?: string | null;
-  submittedPromptSha256?: string | null;
-  submittedPromptLength?: number | null;
-  submittedPromptMessageId?: string | null;
-  submittedPromptConversationId?: string | null;
-  submittedPromptObservationId?: string | null;
-}): void {
-  if (!metadata.submittedPromptHash || !metadata.submittedPromptSha256 ||
-      !metadata.submittedPromptMessageId || !metadata.submittedPromptConversationId || !metadata.submittedPromptObservationId ||
-      typeof metadata.submittedPromptLength !== "number") {
-    throw new Error("Saved session has no verifiable observed user/conversation binding; inspect legacy output as candidate data only");
+export function restoreAnswerBinding(
+  runtime: ChromeClient["Runtime"],
+  metadata: {
+    submittedPromptHash?: string | null;
+    submittedPromptSha256?: string | null;
+    submittedPromptLength?: number | null;
+    submittedPromptMessageId?: string | null;
+    submittedPromptConversationId?: string | null;
+    submittedPromptObservationId?: string | null;
+  },
+): void {
+  if (
+    !metadata.submittedPromptHash ||
+    !metadata.submittedPromptSha256 ||
+    !metadata.submittedPromptMessageId ||
+    !metadata.submittedPromptConversationId ||
+    !metadata.submittedPromptObservationId ||
+    typeof metadata.submittedPromptLength !== "number"
+  ) {
+    throw new Error(
+      "Saved session has no verifiable observed user/conversation binding; inspect legacy output as candidate data only",
+    );
   }
   bindSubmittedAnswer(runtime, {
     fingerprint: metadata.submittedPromptHash,

@@ -1,7 +1,10 @@
 import { buildPromptObservationExpression } from "./promptObservation.js";
 import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
-import { buildConversationTurnListExpression, buildUserMessageIdExpression } from "./conversationTurns.js";
+import {
+  buildConversationTurnListExpression,
+  buildUserMessageIdExpression,
+} from "./conversationTurns.js";
 
 export function browserPromptFingerprint(value: unknown, messageId: string): string {
   return createHash("sha256")
@@ -83,17 +86,23 @@ export async function readSubmittedPromptEvidence(
       })()`,
     timeoutMs,
     (value) => {
-      const turn = value as { text?: unknown; messageId?: unknown; conversationId?: unknown; observationId?: unknown } | null;
+      const turn = value as {
+        text?: unknown;
+        messageId?: unknown;
+        conversationId?: unknown;
+        observationId?: unknown;
+      } | null;
       if (
         typeof turn?.text === "string" &&
         turn.text.trim() &&
         typeof turn.messageId === "string" &&
         turn.messageId.trim() &&
         !previous.has(turn.messageId) &&
-        (!requireContinuity || (
-          typeof turn.conversationId === "string" && turn.conversationId.trim() &&
-          typeof turn.observationId === "string" && turn.observationId.trim()
-        ))
+        (!requireContinuity ||
+          (typeof turn.conversationId === "string" &&
+            turn.conversationId.trim() &&
+            typeof turn.observationId === "string" &&
+            turn.observationId.trim()))
       ) {
         // Match the legacy fingerprint's line-ending normalization only. Preserve
         // case, spaces, tabs, trailing newlines and Unicode without trimming.
@@ -104,7 +113,9 @@ export async function readSubmittedPromptEvidence(
           length: Buffer.byteLength(text, "utf8"),
           messageId: turn.messageId,
           ...(typeof turn.observationId === "string" ? { observationId: turn.observationId } : {}),
-          ...(typeof turn.conversationId === "string" ? { conversationId: turn.conversationId } : {}),
+          ...(typeof turn.conversationId === "string"
+            ? { conversationId: turn.conversationId }
+            : {}),
         };
       }
       return undefined;

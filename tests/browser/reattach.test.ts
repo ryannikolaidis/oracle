@@ -138,9 +138,9 @@ describe("resumeBrowserSession", () => {
   });
 
   test.each(
-    ([undefined, "dom-text"] as const).flatMap(answerCapture =>
-      [false, true].flatMap(hasObservation =>
-        [false, true].map(identityFails => ({ answerCapture, hasObservation, identityFails })),
+    ([undefined, "dom-text"] as const).flatMap((answerCapture) =>
+      [false, true].flatMap((hasObservation) =>
+        [false, true].map((identityFails) => ({ answerCapture, hasObservation, identityFails })),
       ),
     ),
   )(
@@ -151,14 +151,16 @@ describe("resumeBrowserSession", () => {
         chromeHost: "127.0.0.1",
         chromeTargetId: "target-1",
         tabUrl: "https://chatgpt.com/c/abc",
-        ...(hasObservation ? {
-          submittedPromptHash: "saved-fingerprint",
-          submittedPromptSha256: "saved-digest",
-          submittedPromptLength: 5,
-          submittedPromptMessageId: "saved-user",
-          submittedPromptConversationId: "abc",
-          submittedPromptObservationId: "observation-from-an-earlier-page",
-        } : {}),
+        ...(hasObservation
+          ? {
+              submittedPromptHash: "saved-fingerprint",
+              submittedPromptSha256: "saved-digest",
+              submittedPromptLength: 5,
+              submittedPromptMessageId: "saved-user",
+              submittedPromptConversationId: "abc",
+              submittedPromptObservationId: "observation-from-an-earlier-page",
+            }
+          : {}),
       };
       const listTargets = vi.fn(
         async () =>
@@ -202,19 +204,28 @@ describe("resumeBrowserSession", () => {
         throw new Error("must not discard a captured answer");
       });
 
-      const result = await resumeBrowserSession(runtime, { timeoutMs: 2000, answerCapture }, logger, {
-        listTargets,
-        connect,
-        waitForAssistantResponse,
-        captureAssistantMarkdown,
-        waitForConversationHydration,
-        recoverSession,
-      });
+      const result = await resumeBrowserSession(
+        runtime,
+        { timeoutMs: 2000, answerCapture },
+        logger,
+        {
+          listTargets,
+          connect,
+          waitForAssistantResponse,
+          captureAssistantMarkdown,
+          waitForConversationHydration,
+          recoverSession,
+        },
+      );
 
       expect(result.answerText).toBe("Hello PATH plan");
       expect(result.answerMarkdown).toBe("markdown response");
       expect(result.answerRelationship).toBeUndefined();
-      expect(evaluate.mock.calls.some(([params]) => params.expression.includes("__oraclePromptObservations"))).toBe(false);
+      expect(
+        evaluate.mock.calls.some(([params]) =>
+          params.expression.includes("__oraclePromptObservations"),
+        ),
+      ).toBe(false);
       expect(recoverSession).not.toHaveBeenCalled();
       expect(result.captureTarget?.targetId).toBe(identityFails ? undefined : "target-1");
       expect(connect).toHaveBeenCalledWith(
@@ -237,12 +248,14 @@ describe("resumeBrowserSession", () => {
   test("refuses json-code legacy recovery before connecting or accepting candidate output", async () => {
     const recoverSession = vi.fn(async () => ({ answerText: "{}", answerMarkdown: "{}" }));
     const listTargets = vi.fn();
-    await expect(resumeBrowserSession(
-      { chromePort: 9222 },
-      { answerCapture: "json-code" },
-      vi.fn() as BrowserLogger,
-      { recoverSession, listTargets },
-    )).rejects.toThrow(/continuous observed user\/conversation binding/);
+    await expect(
+      resumeBrowserSession(
+        { chromePort: 9222 },
+        { answerCapture: "json-code" },
+        vi.fn() as BrowserLogger,
+        { recoverSession, listTargets },
+      ),
+    ).rejects.toThrow(/continuous observed user\/conversation binding/);
     expect(recoverSession).not.toHaveBeenCalled();
     expect(listTargets).not.toHaveBeenCalled();
   });

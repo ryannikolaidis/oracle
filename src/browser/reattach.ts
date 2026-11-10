@@ -1,5 +1,8 @@
 import { restoreAnswerBinding, type AnswerRelationship } from "./answerBinding.js";
-import { finalizeBoundAssistantAnswer, verifyBoundAssistantReturn } from "./actions/assistantResponse.js";
+import {
+  finalizeBoundAssistantAnswer,
+  verifyBoundAssistantReturn,
+} from "./actions/assistantResponse.js";
 import CDP from "chrome-remote-interface";
 import os from "node:os";
 import path from "node:path";
@@ -81,10 +84,18 @@ export async function resumeBrowserSession(
   logger: BrowserLogger,
   deps: ReattachDeps = {},
 ): Promise<ReattachResult> {
-  if (config?.answerCapture === "json-code" && (!runtime.submittedPromptObservationId || !runtime.submittedPromptConversationId ||
-      !runtime.submittedPromptMessageId || !runtime.submittedPromptSha256 ||
-      !runtime.submittedPromptHash || typeof runtime.submittedPromptLength !== "number")) {
-    throw new Error("Session lacks a continuous observed user/conversation binding; saved legacy output is candidate data only");
+  if (
+    config?.answerCapture === "json-code" &&
+    (!runtime.submittedPromptObservationId ||
+      !runtime.submittedPromptConversationId ||
+      !runtime.submittedPromptMessageId ||
+      !runtime.submittedPromptSha256 ||
+      !runtime.submittedPromptHash ||
+      typeof runtime.submittedPromptLength !== "number")
+  ) {
+    throw new Error(
+      "Session lacks a continuous observed user/conversation binding; saved legacy output is candidate data only",
+    );
   }
   const cancellation = new BrowserCancellation(deps.signal, logger);
   try {
@@ -258,7 +269,9 @@ async function resumeBrowserSessionInternal(
       (deps.promptPreview ? null : await readConversationTurnIndex(Runtime, logger));
     if (config?.researchMode === "deep") {
       if (config?.answerCapture === "json-code") {
-        throw new Error("Deep Research iframe cannot establish the observed user/assistant relationship");
+        throw new Error(
+          "Deep Research iframe cannot establish the observed user/assistant relationship",
+        );
       }
       const waitForDeepResearch =
         deps.waitForDeepResearchCompletion ?? waitForDeepResearchCompletion;
@@ -297,13 +310,22 @@ async function resumeBrowserSessionInternal(
         "Reattach markdown capture timed out",
       )) ?? recovered.text;
     const aligned = alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
-    const bound = config?.answerCapture === "json-code"
-      ? await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture))
-      : { text: aligned.answerText, markdown: aligned.answerMarkdown, answerRelationship: undefined };
+    const bound =
+      config?.answerCapture === "json-code"
+        ? await cancellation.call(() =>
+            finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture),
+          )
+        : {
+            text: aligned.answerText,
+            markdown: aligned.answerMarkdown,
+            answerRelationship: undefined,
+          };
 
     const captureTarget = await captureIdentity().catch(() => undefined);
     if (config?.answerCapture === "json-code") {
-      await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
+      await cancellation.call(() =>
+        verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture),
+      );
     }
     await closeAttached();
     return {
@@ -536,7 +558,9 @@ async function resumeBrowserSessionViaNewChrome(
       (deps.promptPreview ? null : await readConversationTurnIndex(Runtime, logger));
     if (resolved.researchMode === "deep") {
       if (config?.answerCapture === "json-code") {
-        throw new Error("Deep Research iframe cannot establish the observed user/assistant relationship");
+        throw new Error(
+          "Deep Research iframe cannot establish the observed user/assistant relationship",
+        );
       }
       const waitForDeepResearch =
         deps.waitForDeepResearchCompletion ?? waitForDeepResearchCompletion;
@@ -561,14 +585,27 @@ async function resumeBrowserSessionViaNewChrome(
       (await cancellation.call(() => captureMarkdown(Runtime, recovered.meta, logger))) ??
       recovered.text;
     const aligned = alignPromptEchoMarkdown(recovered.text, markdown, promptEcho, logger);
-    const bound = config?.answerCapture === "json-code"
-      ? await cancellation.call(() => finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture))
-      : { text: aligned.answerText, markdown: aligned.answerMarkdown, answerRelationship: undefined };
+    const bound =
+      config?.answerCapture === "json-code"
+        ? await cancellation.call(() =>
+            finalizeBoundAssistantAnswer(Runtime, logger, config?.answerCapture),
+          )
+        : {
+            text: aligned.answerText,
+            markdown: aligned.answerMarkdown,
+            answerRelationship: undefined,
+          };
 
     if (config?.answerCapture === "json-code") {
-      await cancellation.call(() => verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture));
+      await cancellation.call(() =>
+        verifyBoundAssistantReturn(Runtime, bound.text, bound.markdown, config?.answerCapture),
+      );
     }
-    return { answerText: bound.text, answerMarkdown: bound.markdown, answerRelationship: bound.answerRelationship };
+    return {
+      answerText: bound.text,
+      answerMarkdown: bound.markdown,
+      answerRelationship: bound.answerRelationship,
+    };
   } finally {
     await withoutBrowserCancellation(cleanup);
   }

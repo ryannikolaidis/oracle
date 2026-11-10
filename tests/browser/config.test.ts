@@ -8,11 +8,19 @@ describe("resolveBrowserConfig", () => {
   test("JSON capture is opt-in and prevents archive navigation", () => {
     expect(resolveBrowserConfig(undefined).answerCapture).toBe("dom-text");
     expect(resolveBrowserConfig({ answerCapture: "json-code" })).toMatchObject({
-      answerCapture: "json-code", archiveConversations: "never",
+      answerCapture: "json-code",
+      archiveConversations: "never",
     });
-    expect(resolveBrowserConfig({ answerCapture: "json-code", archiveConversations: "auto" }).archiveConversations).toBe("never");
-    expect(() => resolveBrowserConfig({ answerCapture: "json-code", archiveConversations: "always" })).toThrow(/incompatible/);
-    expect(() => resolveBrowserConfig({ answerCapture: "unknown" as "json-code" })).toThrow(/Invalid browser answer capture/);
+    expect(
+      resolveBrowserConfig({ answerCapture: "json-code", archiveConversations: "auto" })
+        .archiveConversations,
+    ).toBe("never");
+    expect(() =>
+      resolveBrowserConfig({ answerCapture: "json-code", archiveConversations: "always" }),
+    ).toThrow(/incompatible/);
+    expect(() => resolveBrowserConfig({ answerCapture: "unknown" as "json-code" })).toThrow(
+      /Invalid browser answer capture/,
+    );
   });
 
   const originalProfileDir = process.env.ORACLE_BROWSER_PROFILE_DIR;

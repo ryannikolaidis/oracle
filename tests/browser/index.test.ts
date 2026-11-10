@@ -784,25 +784,35 @@ describe("browser follow-ups", () => {
   test.each([
     { researchMode: "deep" as const, followUpPrompts: [] },
     { researchMode: undefined, followUpPrompts: ["challenge this answer"] },
-  ])("json-code refuses unsupported transcript shapes before connecting: %o", async ({ researchMode, followUpPrompts }) => {
-    await expect(runBrowserMode({
-      prompt: "review this",
-      followUpPrompts,
-      config: { answerCapture: "json-code", researchMode },
-    })).rejects.toThrow(/single observed user\/assistant relationship/);
-  });
+  ])(
+    "json-code refuses unsupported transcript shapes before connecting: %o",
+    async ({ researchMode, followUpPrompts }) => {
+      await expect(
+        runBrowserMode({
+          prompt: "review this",
+          followUpPrompts,
+          config: { answerCapture: "json-code", researchMode },
+        }),
+      ).rejects.toThrow(/single observed user\/assistant relationship/);
+    },
+  );
 
-  test.each([undefined, "dom-text"] as const)("ordinary follow-ups reach existing configuration validation with capture=%s", async answerCapture => {
-    await expect(runBrowserMode({
-      prompt: "review this",
-      followUpPrompts: ["challenge this answer"],
-      config: {
-        answerCapture,
-        copyProfileSource: "/tmp/source-profile",
-        remoteChrome: { host: "127.0.0.1", port: 9222 },
-      },
-    })).rejects.toThrow(/cannot be combined.*remote Chrome/i);
-  });
+  test.each([undefined, "dom-text"] as const)(
+    "ordinary follow-ups reach existing configuration validation with capture=%s",
+    async (answerCapture) => {
+      await expect(
+        runBrowserMode({
+          prompt: "review this",
+          followUpPrompts: ["challenge this answer"],
+          config: {
+            answerCapture,
+            copyProfileSource: "/tmp/source-profile",
+            remoteChrome: { host: "127.0.0.1", port: 9222 },
+          },
+        }),
+      ).rejects.toThrow(/cannot be combined.*remote Chrome/i);
+    },
+  );
 
   test("rejects Deep Research follow-ups before launching Chrome", async () => {
     await expect(

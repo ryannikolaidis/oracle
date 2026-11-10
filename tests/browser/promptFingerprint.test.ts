@@ -244,7 +244,9 @@ test("normalizes only CRLF and lone CR and measures UTF-8 bytes", async () => {
   const normalized = "  Hé😀\n\tCase\nline  \n";
   const evidence = await readSubmittedPromptEvidence(observedRuntime(raw, "new"), []);
   expect(evidence).toEqual({
-    fingerprint: createHash("sha256").update(JSON.stringify(["new", normalized])).digest("hex"),
+    fingerprint: createHash("sha256")
+      .update(JSON.stringify(["new", normalized]))
+      .digest("hex"),
     sha256: createHash("sha256").update(normalized, "utf8").digest("hex"),
     length: Buffer.byteLength(normalized, "utf8"),
     messageId: "new",
@@ -268,9 +270,10 @@ test("waits for a fresh turn and takes identity and both digests from that same 
   const runtime = {
     evaluate: async () => ({
       result: {
-        value: ++calls === 1
-          ? { text: "stale text", messageId: "old" }
-          : { text: "fresh text", messageId: "new" },
+        value:
+          ++calls === 1
+            ? { text: "stale text", messageId: "old" }
+            : { text: "fresh text", messageId: "new" },
       },
     }),
   } as unknown as ChromeClient["Runtime"];
@@ -299,7 +302,9 @@ test.each([
 });
 
 test("refuses missing baseline, absent DOM turn and failed DOM reads", async () => {
-  expect(await readSubmittedPromptEvidence(observedRuntime("text", "new"), undefined)).toBeUndefined();
+  expect(
+    await readSubmittedPromptEvidence(observedRuntime("text", "new"), undefined),
+  ).toBeUndefined();
   for (const value of [null, undefined, {}]) {
     const runtime = {
       evaluate: async () => ({ result: { value } }),
@@ -307,7 +312,9 @@ test("refuses missing baseline, absent DOM turn and failed DOM reads", async () 
     expect(await readSubmittedPromptEvidence(runtime, [])).toBeUndefined();
   }
   const runtime = {
-    evaluate: async () => { throw new Error("WebSocket is not open"); },
+    evaluate: async () => {
+      throw new Error("WebSocket is not open");
+    },
   } as unknown as ChromeClient["Runtime"];
   expect(await readSubmittedPromptEvidence(runtime, [])).toBeUndefined();
 });
@@ -317,12 +324,21 @@ test("session receipt polling waits for conversation and observation identity in
     { text: "fresh", messageId: "new" },
     { text: "fresh", messageId: "new", conversationId: "conversation" },
     { text: "fresh", messageId: "new", conversationId: " ", observationId: "observation" },
-    { text: "fresh", messageId: "new", conversationId: "conversation", observationId: "observation" },
+    {
+      text: "fresh",
+      messageId: "new",
+      conversationId: "conversation",
+      observationId: "observation",
+    },
   ];
   let calls = 0;
-  const runtime = { evaluate: async () => ({ result: { value: reads[calls++] } }) } as unknown as ChromeClient["Runtime"];
+  const runtime = {
+    evaluate: async () => ({ result: { value: reads[calls++] } }),
+  } as unknown as ChromeClient["Runtime"];
   expect(await readBoundSubmittedPromptEvidence(runtime, [], 1000)).toMatchObject({
-    messageId: "new", conversationId: "conversation", observationId: "observation",
+    messageId: "new",
+    conversationId: "conversation",
+    observationId: "observation",
     sha256: createHash("sha256").update("fresh").digest("hex"),
   });
   expect(calls).toBe(4);
@@ -331,5 +347,7 @@ test("session receipt polling waits for conversation and observation identity in
 test("session receipt polling expires without accepting incomplete continuity while fingerprints remain compatible", async () => {
   const runtime = observedRuntime("fresh", "new");
   expect(await readBoundSubmittedPromptEvidence(runtime, [], 0)).toBeUndefined();
-  expect(await readSubmittedPromptFingerprint(runtime, [], 0)).toBe(browserPromptFingerprint("fresh", "new"));
+  expect(await readSubmittedPromptFingerprint(runtime, [], 0)).toBe(
+    browserPromptFingerprint("fresh", "new"),
+  );
 });

@@ -11,7 +11,10 @@ import {
 
 describe("buildBrowserConfig", () => {
   test("forwards the explicit structured capture flag", async () => {
-    const config = await buildBrowserConfig({ model: "gpt-5.4-pro", browserAnswerCapture: "json-code" });
+    const config = await buildBrowserConfig({
+      model: "gpt-5.4-pro",
+      browserAnswerCapture: "json-code",
+    });
     expect(config.answerCapture).toBe("json-code");
   });
 
