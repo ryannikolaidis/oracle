@@ -1464,7 +1464,7 @@ describe("browser model selection matchers", () => {
         }),
       };
       await expect(
-        ensureModelSelection(runtime as never, "Latest", vi.fn(), "select"),
+        ensureModelSelection(runtime as never, "Latest", (_message: string) => {}, "select"),
       ).resolves.toMatchObject({
         requestedModel: "Latest",
         resolvedLabel: label,
@@ -1483,7 +1483,7 @@ describe("browser model selection matchers", () => {
         }),
       };
       await expect(
-        ensureModelSelection(runtime as never, "Latest", vi.fn(), "select"),
+        ensureModelSelection(runtime as never, "Latest", (_message: string) => {}, "select"),
       ).rejects.toThrow(/requires GPT-6 Astra/);
     },
   );
