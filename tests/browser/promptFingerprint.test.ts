@@ -354,11 +354,22 @@ test("session receipt polling expires without accepting incomplete continuity wh
   );
 });
 
-function strictDomRuntime(initial: FakeElement[]) {
+function strictDomRuntime(initial: FakeElement[], sampling = false) {
   let document = new FakeDocument(initial);
   let calls = 0;
   let observations = 0;
-  const registry: { __oraclePromptObservations?: Map<string, { invalidated: boolean }> } = {};
+  const navigationListeners = new Set<() => void>();
+  const navigation = {
+    addEventListener: (_event: string, listener: () => void) => navigationListeners.add(listener),
+    removeEventListener: (_event: string, listener: () => void) =>
+      navigationListeners.delete(listener),
+  };
+  const registry: {
+    __oraclePromptObservations?: Map<string, { invalidated: boolean }>;
+    navigation?: typeof navigation;
+  } = sampling ? { navigation } : {};
+  let disconnected = 0;
+  const queuedRecords: unknown[] = [];
   let callback: (records: unknown[]) => void = () => {};
   class Observer {
     constructor(fn: typeof callback) {
@@ -366,7 +377,12 @@ function strictDomRuntime(initial: FakeElement[]) {
       observations++;
     }
     observe() {}
-    disconnect() {}
+    takeRecords() {
+      return queuedRecords.splice(0);
+    }
+    disconnect() {
+      disconnected++;
+    }
   }
   const runtime = {
     evaluate: async ({ expression }: { expression: string }) => {
@@ -398,6 +414,16 @@ function strictDomRuntime(initial: FakeElement[]) {
     get invalidated() {
       return registry.__oraclePromptObservations?.get("observation")?.invalidated;
     },
+    get disconnected() {
+      return disconnected;
+    },
+    get navigationListeners() {
+      return navigationListeners.size;
+    },
+    navigate: () => {
+      for (const listener of navigationListeners) listener();
+    },
+    queueMutations: (records: unknown[]) => queuedRecords.push(...records),
     mutate: (records: unknown[]) => callback(records),
     replace: (elements: FakeElement[]) => {
       document = new FakeDocument(elements);
@@ -982,7 +1008,7 @@ test.each(["protocol-exception", "transport-error", "context-unavailable"])(
     expect(report).toHaveBeenCalledTimes(1);
     expect(report.mock.calls[0][0]).toMatchObject(
       scenario === "context-unavailable"
-        ? { outcome: "timeout", reason: "context-unavailable", attempts: 1 }
+        ? { outcome: "rejected", reason: "context-unavailable", attempts: 1 }
         : { outcome: "evaluation-error", reason: "evaluation-error", attempts: 1 },
     );
     expect(JSON.stringify(report.mock.calls)).not.toContain("private");
@@ -1193,3 +1219,299 @@ test("scope metadata allowlist rejects injected evidence, private fields, invali
   });
   expect(JSON.stringify(report.mock.calls)).not.toContain("private");
 });
+
+for (const completes of [false, true]) {
+  test(`mismatch samples remain failure-only when later text is ${completes ? "complete" : "partial"}`, async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const user = committedUser("short", "private-message-id");
+      const bubble = user.children[0];
+      let text = "short";
+      Object.defineProperty(bubble, "textContent", { get: () => text });
+      const page = strictDomRuntime(
+        [new FakeElement("article", { "data-turn-key": "private-turn" }, [user])],
+        true,
+      );
+      const report = vi.fn();
+      const pending = readBoundSubmittedPromptEvidence(
+        page.runtime,
+        [],
+        "complete Hé😀\r\nprompt",
+        0,
+        report,
+      );
+      await vi.advanceTimersByTimeAsync(250);
+      if (completes) text = "complete Hé😀\nprompt";
+      await vi.advanceTimersByTimeAsync(750);
+      expect(await pending).toBeUndefined();
+      expect(page.calls).toBe(1);
+      expect(page.invalidated).toBeUndefined();
+      expect(page.disconnected).toBe(1);
+      expect(page.navigationListeners).toBe(0);
+      const failure = report.mock.calls[0][0];
+      expect(failure.reason).toBe("text-mismatch");
+      expect(failure.observationAvailable).toBe(false);
+      expect(failure.mismatchSamples).toEqual([
+        {
+          elapsedMs: 250,
+          length: 5,
+          sha256: createHash("sha256").update("short").digest("hex"),
+          equalsExpected: false,
+        },
+        {
+          elapsedMs: 1000,
+          length: Buffer.byteLength(text),
+          sha256: createHash("sha256").update(text).digest("hex"),
+          equalsExpected: completes,
+        },
+      ]);
+      const saved = JSON.stringify(failure);
+      for (const secret of [
+        "short",
+        "complete",
+        "private-message-id",
+        "private-turn",
+        "https://chatgpt.com",
+        "prompt",
+      ]) {
+        expect(saved).not.toContain(secret);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+}
+
+test.each([
+  "identity-restored",
+  "competitor-removed",
+  "missing-identity",
+  "detach-reinsert",
+  "bubble-replaced",
+  "navigation-return",
+])("mismatch sampling discards every sample after a correlation race: %s", async (race) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    const user = committedUser("short", "new");
+    const turn = new FakeElement("article", { "data-turn-key": "turn" }, [user]);
+    const page = strictDomRuntime([turn], true);
+    const report = vi.fn();
+    const pending = readBoundSubmittedPromptEvidence(page.runtime, [], "expected", 5000, report);
+    await vi.advanceTimersByTimeAsync(250);
+    if (race === "navigation-return") page.navigate();
+    else if (race === "identity-restored") {
+      // The final DOM already has the original ID; the mutation must still invalidate it.
+      page.mutate([
+        {
+          type: "attributes",
+          target: user,
+          attributeName: "data-message-id",
+          removedNodes: [],
+          addedNodes: [],
+        },
+      ]);
+    } else {
+      const node =
+        race === "detach-reinsert"
+          ? user
+          : race === "bubble-replaced"
+            ? user.children[0]
+            : committedUser("other", race === "missing-identity" ? undefined : "competitor");
+      page.mutate([{ type: "childList", target: turn, removedNodes: [node], addedNodes: [node] }]);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await pending).toBeUndefined();
+    expect(report.mock.calls[0][0]).not.toHaveProperty("mismatchSamples");
+    expect(page.calls).toBe(1);
+    expect(page.disconnected).toBe(1);
+    expect(page.navigationListeners).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("mismatch sampling is omitted without navigation continuity or a canonical turn", async () => {
+  const report = vi.fn();
+  const page = strictDomRuntime([committedUser("short", "new")], true);
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], "expected", 0, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0][0]).not.toHaveProperty("mismatchSamples");
+  expect(page.observations).toBe(0);
+});
+
+test.each(["missing", "competing"])(
+  "identity rejection schedules no diagnostic waits: %s",
+  async (kind) => {
+    vi.useFakeTimers();
+    try {
+      const users = [committedUser("short", kind === "missing" ? undefined : "new")];
+      if (kind === "competing") users.push(committedUser("short", "other"));
+      const page = strictDomRuntime(users, true);
+      const report = vi.fn();
+      expect(
+        await readBoundSubmittedPromptEvidence(page.runtime, [], "expected", 1000, report),
+      ).toBeUndefined();
+      expect(report.mock.calls[0][0]).not.toHaveProperty("mismatchSamples");
+      expect(page.observations).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test.each(
+  [
+    [{ elapsedMs: 250, text: "private" }],
+    [
+      { elapsedMs: 250, text: "private" },
+      { elapsedMs: 1000, text: "x".repeat(65_537) },
+    ],
+    [
+      { elapsedMs: -1, text: "private" },
+      { elapsedMs: 1000, text: "private" },
+    ],
+    [
+      { elapsedMs: 250, text: "private" },
+      { elapsedMs: 1501, text: "private" },
+    ],
+    [
+      { elapsedMs: 250, text: "private" },
+      { elapsedMs: NaN, text: "private" },
+    ],
+  ].map((mismatchSamples) => ({ mismatchSamples })),
+)("malformed temporal diagnostics are omitted as a unit: %#", async ({ mismatchSamples }) => {
+  const runtime = {
+    evaluate: async () => ({
+      result: {
+        value: {
+          associationRejected: true,
+          diagnostic: {
+            reason: "text-mismatch",
+            freshCandidates: 1,
+            missingIdentities: 0,
+            mismatchSamples,
+          },
+        },
+      },
+    }),
+  } as unknown as ChromeClient["Runtime"];
+  const report = vi.fn();
+  await readBoundSubmittedPromptEvidence(runtime, [], "expected", 0, report);
+  expect(report.mock.calls[0][0]).not.toHaveProperty("mismatchSamples");
+  expect(JSON.stringify(report.mock.calls)).not.toContain("private");
+});
+
+test("temporal metadata copies only bounded measurements and computes its own hashes", async () => {
+  const runtime = {
+    evaluate: async () => ({
+      result: {
+        value: {
+          associationRejected: true,
+          diagnostic: {
+            reason: "text-mismatch",
+            freshCandidates: 1,
+            missingIdentities: 0,
+            mismatchSamples: [250, 1000].map((elapsedMs) => ({
+              elapsedMs,
+              text: "Hé😀\r\n",
+              sha256: "secret",
+              messageId: "secret",
+              dom: "secret",
+              equalsExpected: false,
+            })),
+          },
+        },
+      },
+    }),
+  } as unknown as ChromeClient["Runtime"];
+  const report = vi.fn();
+  await readBoundSubmittedPromptEvidence(runtime, [], "Hé😀\n", 0, report);
+  expect(report.mock.calls[0][0].mismatchSamples).toEqual(
+    [250, 1000].map((elapsedMs) => ({
+      elapsedMs,
+      length: Buffer.byteLength("Hé😀\n"),
+      sha256: createHash("sha256").update("Hé😀\n").digest("hex"),
+      equalsExpected: true,
+    })),
+  );
+  expect(JSON.stringify(report.mock.calls)).not.toContain("secret");
+});
+
+test("strict context loss never retries an evaluation that may already be sampling a mismatch", async () => {
+  const report = vi.fn();
+  const evaluate = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Execution context was destroyed: secret"))
+    .mockResolvedValue({
+      result: {
+        value: {
+          text: "expected",
+          messageId: "new",
+          conversationId: "conversation",
+          observationId: "observation",
+        },
+      },
+    });
+  expect(
+    await readBoundSubmittedPromptEvidence(
+      { evaluate } as unknown as ChromeClient["Runtime"],
+      [],
+      "expected",
+      5000,
+      report,
+    ),
+  ).toBeUndefined();
+  expect(evaluate).toHaveBeenCalledTimes(1);
+  expect(evaluate.mock.calls[0][0]).toMatchObject({ awaitPromise: true });
+  expect(report.mock.calls[0][0]).toMatchObject({
+    outcome: "rejected",
+    reason: "context-unavailable",
+  });
+  expect(JSON.stringify(report.mock.calls)).not.toContain("secret");
+});
+
+test.each(["oversized", "throwing", "queued-identity"])(
+  "unsafe later sample removes the whole sequence: %s",
+  async (scenario) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const user = committedUser("short", "new");
+      const bubble = user.children[0];
+      const page = strictDomRuntime(
+        [new FakeElement("article", { "data-turn-key": "turn" }, [user])],
+        true,
+      );
+      const report = vi.fn();
+      const pending = readBoundSubmittedPromptEvidence(page.runtime, [], "expected", 0, report);
+      await vi.advanceTimersByTimeAsync(250);
+      Object.defineProperty(bubble, "textContent", {
+        get: () => {
+          if (scenario === "throwing") throw new Error("secret");
+          if (scenario === "queued-identity")
+            page.queueMutations([
+              {
+                type: "attributes",
+                target: user,
+                attributeName: "data-message-id",
+                removedNodes: [],
+                addedNodes: [],
+              },
+            ]);
+          return scenario === "oversized" ? "x".repeat(65_537) : "expected";
+        },
+      });
+      await vi.advanceTimersByTimeAsync(750);
+      expect(await pending).toBeUndefined();
+      expect(report.mock.calls[0][0].reason).toBe("text-mismatch");
+      expect(report.mock.calls[0][0]).not.toHaveProperty("mismatchSamples");
+      expect(JSON.stringify(report.mock.calls)).not.toContain("secret");
+      expect(page.disconnected).toBe(1);
+      expect(page.navigationListeners).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);

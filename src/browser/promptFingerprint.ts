@@ -1,3 +1,4 @@
+import { buildMismatchSamplingExpression } from "./promptMismatchSampling.js";
 import { buildPromptObservationExpression } from "./promptObservation.js";
 import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
@@ -65,6 +66,14 @@ export interface PromptScopeDiagnostic {
   ownedByUser?: boolean;
 }
 
+export interface PromptMismatchSample {
+  /** Milliseconds since the initial mismatch, measured with the page's monotonic clock. */
+  elapsedMs: number;
+  length: number;
+  sha256: string;
+  equalsExpected: boolean;
+}
+
 /** Failure-only telemetry. Never a substitute for SubmittedPromptEvidence. */
 export interface PromptAssociationFailure {
   version: 1;
@@ -96,6 +105,8 @@ export interface PromptAssociationFailure {
   conversationAvailable?: boolean;
   observationAvailable?: boolean;
   scopes?: Partial<Record<(typeof SCOPE_NAMES)[number], PromptScopeDiagnostic>>;
+  /** Two diagnostic-only bubble.textContent reads, or absent if correlation fails. */
+  mismatchSamples?: PromptMismatchSample[];
 }
 
 type FailureReporter = (failure: PromptAssociationFailure) => void;
@@ -228,6 +239,40 @@ function associationFailure(
       (failure.scopes ??= {})[name] = scope;
     }
   }
+  // Never copy page-provided hashes, identities, arbitrary keys or unbounded samples.
+  if (
+    outcome === "rejected" &&
+    reason === "text-mismatch" &&
+    diagnostic?.freshCandidates === 1 &&
+    diagnostic?.missingIdentities === 0 &&
+    typeof submittedPrompt === "string" &&
+    Array.isArray(diagnostic.mismatchSamples) &&
+    diagnostic.mismatchSamples.length === 2
+  ) {
+    const samples: PromptMismatchSample[] = [];
+    for (const [index, sample] of diagnostic.mismatchSamples.entries()) {
+      if (
+        !sample ||
+        typeof sample !== "object" ||
+        typeof sample.text !== "string" ||
+        sample.text.length > MAX_SCOPE_TEXT_LENGTH ||
+        typeof sample.elapsedMs !== "number" ||
+        !Number.isFinite(sample.elapsedMs) ||
+        sample.elapsedMs < [250, 1000][index] ||
+        sample.elapsedMs > 1500 ||
+        (index > 0 && sample.elapsedMs < samples[0].elapsedMs)
+      )
+        break;
+      const text = sample.text.replace(/\r\n?/g, "\n");
+      samples.push({
+        elapsedMs: Math.floor(sample.elapsedMs),
+        length: Buffer.byteLength(text, "utf8"),
+        sha256: createHash("sha256").update(text, "utf8").digest("hex"),
+        equalsExpected: text === submittedPrompt.replace(/\r\n?/g, "\n"),
+      });
+    }
+    if (samples.length === 2) failure.mismatchSamples = samples;
+  }
   return failure;
 }
 
@@ -283,7 +328,8 @@ export async function readSubmittedPromptEvidence(
   const normalizedSubmittedPrompt = submittedPrompt?.replace(/\r\n?/g, "\n");
   return readDomUntil(
     runtime,
-    `(() => {
+    `(${requireContinuity ? "async " : ""}() => {
+        const previous = ${JSON.stringify([...previous])};
         const diagnostic = {};
         const turns = ${
           requireContinuity
@@ -324,6 +370,9 @@ export async function readSubmittedPromptEvidence(
             ${
               requireContinuity
                 ? `const bubble = user.querySelector('[data-user-message-bubble="true"]') || user;
+            const mismatchStarted = performance.now();
+            const mismatchTurn = user.closest('[data-turn-key]');
+            const mismatchHref = typeof location === 'object' ? location.href : undefined;
             const text = bubble.textContent;
             const conversationId = typeof location === 'object' && typeof location.href === 'string'
               ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined;
@@ -335,7 +384,6 @@ export async function readSubmittedPromptEvidence(
               observationAvailable: false,
             });
             if (typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
-              // No additional evaluation, observation, or acceptance path.
               // Diagnostic reads cannot supply successful binding evidence.
               const scopes = {};
               for (const [name, node] of [['bubble', bubble], ['user', user], ['turn', user.closest('[data-turn-key]')]]) {
@@ -358,7 +406,8 @@ export async function readSubmittedPromptEvidence(
                 }
                 scopes[name] = scope;
               }
-              return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'text-mismatch', scopes }, text, conversationId };
+              const mismatchSamples = await ${buildMismatchSamplingExpression(MAX_SCOPE_TEXT_LENGTH)};
+              return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'text-mismatch', scopes, mismatchSamples }, text, conversationId };
             }`
                 : ""
             }
@@ -446,7 +495,11 @@ async function readDomUntil<T>(
   for (;;) {
     attempts++;
     try {
-      const result = await runtime.evaluate({ expression, returnByValue: true });
+      const result = await runtime.evaluate({
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+      });
       contextUnavailable = false;
       lastValue = result.result?.value;
       if (onFailure && result.exceptionDetails) {
@@ -468,6 +521,12 @@ async function readDomUntil<T>(
         )
       ) {
         onFailure?.("evaluation-error", null, attempts);
+        return undefined;
+      }
+      // A strict evaluation may already have rejected text and be sampling it.
+      // Never retry it in a replacement context and accidentally accept later text.
+      if (reject) {
+        onFailure?.("rejected", null, attempts, true);
         return undefined;
       }
       contextUnavailable = true;
