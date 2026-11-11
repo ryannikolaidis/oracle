@@ -7,6 +7,7 @@ import {
   readSubmittedPromptFingerprint,
   readSubmittedPromptEvidence,
   readUserMessageIds,
+  type PromptAssociationFailure,
 } from "../../src/browser/promptFingerprint.js";
 import type { ChromeClient } from "../../src/browser/types.js";
 import { bindSubmittedAnswer, evaluateBoundAnswer } from "../../src/browser/answerBinding.js";
@@ -441,6 +442,70 @@ function committedUser(text: string, id?: string) {
     [new FakeElement("div", { "data-user-message-bubble": "true" }, [], text)],
   );
 }
+
+test.each(["missing", "extra", "duplicate", "empty extra", "nested extra"])(
+  "strict association refuses %s user content before starting an observation",
+  async (scenario) => {
+    const prompt = "Exact requested prompt";
+    const user = committedUser(prompt, "new-user");
+    if (scenario === "missing") {
+      user.children[0]!.remove();
+      user.append(new FakeElement("div", {}, [], prompt));
+    } else {
+      const extra = new FakeElement(
+        "div",
+        { "data-user-message-bubble": "true" },
+        [],
+        scenario === "duplicate" ? prompt : scenario === "empty extra" ? "" : "Extra instruction",
+      );
+      user.append(
+        scenario === "nested extra"
+          ? new FakeElement("div", { "data-message-author-role": "user" }, [extra])
+          : extra,
+      );
+    }
+    const page = strictDomRuntime([user]);
+    const failures: PromptAssociationFailure[] = [];
+    expect(
+      await readBoundSubmittedPromptEvidence(page.runtime, [], prompt, 1000, (failure) =>
+        failures.push(failure),
+      ),
+    ).toBeUndefined();
+    expect(page.calls).toBe(1);
+    expect(page.observations).toBe(0);
+    expect(failures).toEqual([
+      expect.objectContaining({
+        outcome: "rejected",
+        reason: "non-unique-user-content",
+        bubbleCount: scenario === "missing" ? 0 : 2,
+      }),
+    ]);
+  },
+);
+
+test.each([0, 2])(
+  "legacy prompt evidence retains its behavior with %i content bubbles",
+  async (count) => {
+    const user = new FakeElement(
+      "div",
+      { "data-message-author-role": "user", "data-message-id": "legacy-user" },
+      count === 0
+        ? []
+        : [
+            new FakeElement("div", { "data-user-message-bubble": "true" }, [], "Legacy prompt"),
+            new FakeElement("div", { "data-user-message-bubble": "true" }, [], "Extra instruction"),
+          ],
+      count === 0 ? "Legacy prompt" : "",
+    );
+    const page = strictDomRuntime([user]);
+    expect(await readSubmittedPromptEvidence(page.runtime, [])).toMatchObject({
+      fingerprint: browserPromptFingerprint("Legacy prompt", "legacy-user"),
+      messageId: "legacy-user",
+      length: Buffer.byteLength("Legacy prompt", "utf8"),
+    });
+    expect(page.observations).toBe(0);
+  },
+);
 
 // Read the recorded user subtree, including both nested role wrappers and the
 // bubble's controls. Keep its enclosing turn identity from the same fixture.

@@ -4,6 +4,7 @@ import { browserPromptFingerprint, type SubmittedPromptEvidence } from "./prompt
 import {
   buildAssistantMessageIdExpression,
   buildConversationTurnListExpression,
+  buildUserContentBubblesExpression,
   buildUserMessageIdExpression,
 } from "./conversationTurns.js";
 import { ASSISTANT_ROLE_SELECTOR } from "./constants.js";
@@ -98,12 +99,13 @@ export function buildAnswerRelationshipExpression(): string {
     }
     const users = messages.filter(item => item.role === 'user');
     const user = users.at(-1)?.node;
+    const bubbles = ${buildUserContentBubblesExpression()};
     const after = messages.slice(messages.findIndex(item => item.node === user) + 1);
     return {
       conversationId: location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] ?? null,
       userMessageId: ${buildUserMessageIdExpression()},
       userIds: users.map(item => { const user = item.node; return ${buildUserMessageIdExpression()}; }),
-      userText: user ? (user.querySelector('[data-user-message-bubble="true"]') || user).textContent : null,
+      userText: bubbles.length === 1 ? bubbles[0].textContent : null,
       assistantIds: after.map(item => id(item.node)),
       roles: after.map(item => item.role),
     };

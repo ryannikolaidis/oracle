@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
 import {
   buildConversationTurnListExpression,
+  buildUserContentBubblesExpression,
   buildUserMessageIdExpression,
 } from "./conversationTurns.js";
 
@@ -83,6 +84,7 @@ export interface PromptAssociationFailure {
     | "submission-unavailable"
     | "missing-identity"
     | "multiple-fresh-users"
+    | "non-unique-user-content"
     | "text-mismatch"
     | "no-fresh-user"
     | "continuity-unavailable"
@@ -136,6 +138,7 @@ function associationFailure(
   const reasons: PromptAssociationFailure["reason"][] = [
     "missing-identity",
     "multiple-fresh-users",
+    "non-unique-user-content",
     "text-mismatch",
     "no-fresh-user",
   ];
@@ -369,7 +372,10 @@ export async function readSubmittedPromptEvidence(
             if (${JSON.stringify([...previous])}.includes(messageId)) return null;
             ${
               requireContinuity
-                ? `const bubble = user.querySelector('[data-user-message-bubble="true"]') || user;
+                ? `const bubbles = ${buildUserContentBubblesExpression()};
+            diagnostic.bubbleCount = bubbles.length;
+            if (bubbles.length !== 1) return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'non-unique-user-content' } };
+            const bubble = bubbles[0];
             const mismatchStarted = performance.now();
             const mismatchTurn = user.closest('[data-turn-key]');
             const mismatchHref = typeof location === 'object' ? location.href : undefined;
@@ -377,7 +383,6 @@ export async function readSubmittedPromptEvidence(
             const conversationId = typeof location === 'object' && typeof location.href === 'string'
               ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined;
             Object.assign(diagnostic, {
-              bubbleCount: user.querySelectorAll('[data-user-message-bubble="true"]').length,
               brCount: bubble.querySelectorAll('br').length,
               blockCount: bubble.querySelectorAll('div, p, pre, li, blockquote').length,
               conversationAvailable: typeof conversationId === 'string' && !!conversationId,
@@ -417,7 +422,7 @@ export async function readSubmittedPromptEvidence(
               diagnostic,
               observationId,
               conversationId: typeof location === 'object' && typeof location.href === 'string' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
-              text: (user.querySelector('[data-user-message-bubble="true"]') || user).textContent,
+              text: ${requireContinuity ? "bubble" : `(user.querySelector('[data-user-message-bubble="true"]') || user)`}.textContent,
               messageId,
             };
           }

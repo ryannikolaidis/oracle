@@ -105,6 +105,56 @@ test("accepts only the observed user and the identified following assistant, pre
   expect(result.result.value).toEqual({ text: "The bound answer", messageId: "answer-original" });
 });
 
+test("accepts one content bubble beneath nested user-role wrappers", async () => {
+  const nested = new FakeElement("div", { "data-message-author-role": "user" }, [user()]);
+  const turn = new FakeElement("div", { "data-turn-key": "user-original" }, [nested, assistant()]);
+  const p = page([turn]);
+  await expect(evaluateBoundAnswer(p.runtime, selection)).resolves.toMatchObject({
+    result: { value: { text: "The bound answer", messageId: "answer-original" } },
+  });
+});
+
+test.each(["before", "during"])(
+  "rejects non-unique user content introduced %s answer selection",
+  async (phase) => {
+    for (const scenario of ["missing", "extra", "duplicate", "empty extra", "nested extra"]) {
+      const observed = user();
+      const p = page([observed, assistant()]);
+      const change = () => {
+        if (scenario === "missing") {
+          observed.children[0]!.remove();
+          observed.append(new FakeElement("div", {}, [], prompt));
+        } else {
+          const extra = new FakeElement(
+            "div",
+            { "data-user-message-bubble": "true" },
+            [],
+            scenario === "duplicate"
+              ? prompt
+              : scenario === "empty extra"
+                ? ""
+                : "Extra instruction",
+          );
+          observed.append(
+            scenario === "nested extra"
+              ? new FakeElement("div", { "data-message-author-role": "user" }, [extra])
+              : extra,
+          );
+        }
+      };
+      if (phase === "before") change();
+      else p.setDuring(change);
+      await expect(
+        evaluateBoundAnswer(p.runtime, {
+          expression:
+            '(async () => { during(); return { text: "The bound answer", messageId: "answer-original" }; })()',
+        }),
+      ).rejects.toThrow(/binding rejected/);
+      await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/invalidated/);
+    }
+  },
+);
+
 test("allows an observer to start before the assistant mounts", async () => {
   const p = page([user()]);
   p.setDuring(() => p.document.body.append(assistant()));
