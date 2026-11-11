@@ -28,6 +28,11 @@ import { BrowserAutomationError } from "../../oracle/errors.js";
 import { buildAttachmentEvidenceExpression } from "./attachmentEvidence.js";
 import { buildAttachmentProgressExpression } from "./attachmentProgress.js";
 import { buildInstallCompletionAnnouncementExpression } from "./completionAnnouncement.js";
+import {
+  buildBeginComposerIntegrity,
+  buildCheckComposerIntegrity,
+  COMPOSER_TEXT_READER,
+} from "./composerIntegrity.js";
 import { activateWebSearch } from "./webSearch.js";
 
 const ENTER_KEY_EVENT = {
@@ -63,6 +68,7 @@ export async function submitPrompt(
     attachmentTimeoutMs?: number | null;
     onPromptSubmitted?: () => Promise<void> | void;
     webSearch?: boolean;
+    strictCapture?: boolean;
   },
   prompt: string,
   logger: BrowserLogger,
@@ -82,14 +88,32 @@ export async function submitPrompt(
     await assertComposerPlusStayedInPlace(runtime, deps.attachmentNavigationUrl!);
   }
 
-  await waitForDomReady(runtime, logger, deps.inputTimeoutMs ?? undefined);
-  let observedLength: number;
-  if (hasAttachments) {
-    observedLength = await stageAttachmentPrompt(runtime, prompt, deps.attachmentNavigationUrl!);
-  } else {
-    const encodedPrompt = JSON.stringify(prompt);
-    const focusResult = await runtime.evaluate({
-      expression: `(() => {
+  const integrityKey =
+    deps.strictCapture && !hasAttachments ? `__oracleComposerIntegrity_${randomUUID()}` : undefined;
+  const assertIntegrity = async () => {
+    if (!integrityKey) return;
+    const result = await runtime.evaluate({
+      expression: buildCheckComposerIntegrity(integrityKey),
+      returnByValue: true,
+    });
+    if (result.result?.value !== true) throw composerIntegrityError();
+  };
+  try {
+    await waitForDomReady(runtime, logger, deps.inputTimeoutMs ?? undefined);
+    if (integrityKey) {
+      const result = await runtime.evaluate({
+        expression: buildBeginComposerIntegrity(integrityKey, prompt),
+        returnByValue: true,
+      });
+      if (result.result?.value !== true) throw composerIntegrityError();
+    }
+    let observedLength: number;
+    if (hasAttachments) {
+      observedLength = await stageAttachmentPrompt(runtime, prompt, deps.attachmentNavigationUrl!);
+    } else {
+      const encodedPrompt = JSON.stringify(prompt);
+      const focusResult = await runtime.evaluate({
+        expression: `(() => {
       ${buildClickDispatcher()}
       const SELECTORS = ${JSON.stringify(INPUT_SELECTORS)};
       const isVisible = (node) => {
@@ -127,28 +151,29 @@ export async function submitPrompt(
           candidates.push(node);
         }
       }
-      const preferred = candidates.find((node) => isVisible(node)) || candidates[0];
+      const preferred = ${integrityKey ? `globalThis[${JSON.stringify(integrityKey)}]?.editor` : "candidates.find((node) => isVisible(node)) || candidates[0]"};
       if (preferred && focusNode(preferred)) {
         return { focused: true };
       }
       return { focused: false };
     })()`,
-      returnByValue: true,
-      awaitPromise: true,
-    });
-    if (!focusResult.result?.value?.focused) {
-      await logDomFailure(runtime, logger, "focus-textarea");
-      throw new Error("Failed to focus prompt textarea");
-    }
+        returnByValue: true,
+        awaitPromise: true,
+      });
+      if (!focusResult.result?.value?.focused) {
+        await logDomFailure(runtime, logger, "focus-textarea");
+        throw new Error("Failed to focus prompt textarea");
+      }
 
-    // ProseMirror can treat typed newlines as submission; paste without pressing Enter.
-    let pastedMultiline = false;
-    if (prompt.includes("\n")) {
-      const pasteResult = await runtime.evaluate({
-        expression: `(() => {
+      // ProseMirror can treat typed newlines as submission; paste without pressing Enter.
+      let pastedMultiline = false;
+      if (prompt.includes("\n")) {
+        const pasteResult = await runtime.evaluate({
+          expression: `(() => {
         const selectors = ${JSON.stringify(INPUT_SELECTORS)};
         const visible = (node) => { const r = node?.getBoundingClientRect?.(); return Boolean(r && r.width > 0 && r.height > 0); };
-        const editor = selectors.map((s) => document.querySelector(s)).find((n) => n && visible(n));
+        ${integrityKey ? `if (!${buildCheckComposerIntegrity(integrityKey, false)}) return { used: true, complete: false };` : ""}
+        const editor = ${integrityKey ? `globalThis[${JSON.stringify(integrityKey)}]?.editor` : "selectors.map((s) => document.querySelector(s)).find((n) => n && visible(n))"};
         if (editor instanceof HTMLTextAreaElement) return { used: false };
         if (!editor?.isContentEditable) return { used: true, complete: false };
         const text = ${encodedPrompt};
@@ -175,60 +200,55 @@ export async function submitPrompt(
         }
         // innerText adds layout spacing between paragraphs. Read actual hard breaks and block
         // boundaries instead, ignoring only ProseMirror's decorative trailing break.
-        const readText = node => {
-          if (node.nodeType === 3) return node.nodeValue || '';
-          if (node.nodeName === 'BR') return node.classList.contains('ProseMirror-trailingBreak') ? '' : '\\n';
-          const children = Array.from(node.childNodes || []);
-          return children.map((child, index) => {
-            const previous = children[index - 1];
-            const block = value => /^(P|DIV|PRE|LI)$/.test(value?.nodeName || '');
-            return (index > 0 && (block(child) || block(previous)) ? '\\n' : '') + readText(child);
-          }).join('');
-        };
+        ${COMPOSER_TEXT_READER}
         const normalize = value => value.replace(/\\r\\n?/g, '\\n');
         const landed = normalize(readText(editor));
         const expected = normalize(text);
         const convertedToFile = chips() > chipsBefore;
         return { used: true, length: landed.length, expected: expected.length, complete: landed === expected, convertedToFile };
       })()`,
-        returnByValue: true,
-      });
-      const pasted = pasteResult.result?.value as
-        | {
-            used?: boolean;
-            length?: number;
-            expected?: number;
-            complete?: boolean;
-            convertedToFile?: boolean;
+          returnByValue: true,
+        });
+        const pasted = pasteResult.result?.value as
+          | {
+              used?: boolean;
+              length?: number;
+              expected?: number;
+              complete?: boolean;
+              convertedToFile?: boolean;
+            }
+          | undefined;
+        if (pasted?.used !== false) {
+          const complete = pasted?.complete === true && !pasted.convertedToFile;
+          if (!complete) {
+            // Never fall back to typing here: a typed newline submits the first line only.
+            throw new BrowserAutomationError(
+              `ChatGPT did not accept the pasted prompt intact (${pasted?.length ?? 0}/${pasted?.expected ?? 0} chars${pasted?.convertedToFile ? ", converted to a file" : ""}); nothing was sent.`,
+              { stage: "submit-prompt", code: "prompt-paste-incomplete" },
+            );
           }
-        | undefined;
-      if (pasted?.used !== false) {
-        const complete = pasted?.complete === true && !pasted.convertedToFile;
-        if (!complete) {
-          // Never fall back to typing here: a typed newline submits the first line only.
-          throw new BrowserAutomationError(
-            `ChatGPT did not accept the pasted prompt intact (${pasted?.length ?? 0}/${pasted?.expected ?? 0} chars${pasted?.convertedToFile ? ", converted to a file" : ""}); nothing was sent.`,
-            { stage: "submit-prompt", code: "prompt-paste-incomplete" },
-          );
         }
+        pastedMultiline = Boolean(pasted?.used && (pasted.length ?? 0) > 0);
+        logger(
+          `Prompt delivery: ${pastedMultiline ? "paste (multi-line, contenteditable)" : "typed"}`,
+        );
       }
-      pastedMultiline = Boolean(pasted?.used && (pasted.length ?? 0) > 0);
-      logger(
-        `Prompt delivery: ${pastedMultiline ? "paste (multi-line, contenteditable)" : "typed"}`,
-      );
-    }
-    if (!pastedMultiline) {
-      await input.insertText({ text: prompt });
-    }
+      if (!pastedMultiline) {
+        await input.insertText({ text: prompt });
+      }
 
-    // Some pages (notably ChatGPT when subscriptions/widgets load) need a brief settle
-    // before the send button becomes enabled; give it a short breather to avoid races.
-    await delay(500);
+      // Some pages (notably ChatGPT when subscriptions/widgets load) need a brief settle
+      // before the send button becomes enabled; give it a short breather to avoid races.
+      await delay(500);
+      await assertIntegrity();
 
-    const primarySelectorLiteral = JSON.stringify(PROMPT_PRIMARY_SELECTOR);
-    const fallbackSelectorLiteral = JSON.stringify(PROMPT_FALLBACK_SELECTOR);
-    const verification = await runtime.evaluate({
-      expression: `(() => {
+      if (integrityKey) {
+        observedLength = prompt.length;
+      } else {
+        const primarySelectorLiteral = JSON.stringify(PROMPT_PRIMARY_SELECTOR);
+        const fallbackSelectorLiteral = JSON.stringify(PROMPT_FALLBACK_SELECTOR);
+        const verification = await runtime.evaluate({
+          expression: `(() => {
       const editor = document.querySelector(${primarySelectorLiteral});
       const fallback = document.querySelector(${fallbackSelectorLiteral});
       const inputSelectors = ${JSON.stringify(INPUT_SELECTORS)};
@@ -252,19 +272,19 @@ export async function submitPrompt(
         activeValue: active ? readValue(active) : '',
       };
     })()`,
-      returnByValue: true,
-    });
+          returnByValue: true,
+        });
 
-    const editorTextRaw = verification.result?.value?.editorText ?? "";
-    const fallbackValueRaw = verification.result?.value?.fallbackValue ?? "";
-    const activeValueRaw = verification.result?.value?.activeValue ?? "";
-    const editorTextTrimmed = editorTextRaw?.trim?.() ?? "";
-    const fallbackValueTrimmed = fallbackValueRaw?.trim?.() ?? "";
-    const activeValueTrimmed = activeValueRaw?.trim?.() ?? "";
-    if (!editorTextTrimmed && !fallbackValueTrimmed && !activeValueTrimmed) {
-      // Learned: occasionally Input.insertText doesn't land in the editor; force textContent/value + input events.
-      await runtime.evaluate({
-        expression: `(() => {
+        const editorTextRaw = verification.result?.value?.editorText ?? "";
+        const fallbackValueRaw = verification.result?.value?.fallbackValue ?? "";
+        const activeValueRaw = verification.result?.value?.activeValue ?? "";
+        const editorTextTrimmed = editorTextRaw?.trim?.() ?? "";
+        const fallbackValueTrimmed = fallbackValueRaw?.trim?.() ?? "";
+        const activeValueTrimmed = activeValueRaw?.trim?.() ?? "";
+        if (!editorTextTrimmed && !fallbackValueTrimmed && !activeValueTrimmed) {
+          // Learned: occasionally Input.insertText doesn't land in the editor; force textContent/value + input events.
+          await runtime.evaluate({
+            expression: `(() => {
         const fallback = document.querySelector(${fallbackSelectorLiteral});
         if (fallback) {
           fallback.value = ${encodedPrompt};
@@ -278,11 +298,11 @@ export async function submitPrompt(
           editor.dispatchEvent(new InputEvent('input', { bubbles: true, data: ${encodedPrompt}, inputType: 'insertFromPaste' }));
         }
       })()`,
-      });
-    }
+          });
+        }
 
-    const postVerification = await runtime.evaluate({
-      expression: `(() => {
+        const postVerification = await runtime.evaluate({
+          expression: `(() => {
       const editor = document.querySelector(${primarySelectorLiteral});
       const fallback = document.querySelector(${fallbackSelectorLiteral});
       const inputSelectors = ${JSON.stringify(INPUT_SELECTORS)};
@@ -306,68 +326,87 @@ export async function submitPrompt(
         activeValue: active ? readValue(active) : '',
       };
     })()`,
-      returnByValue: true,
-    });
-    const observedEditor = postVerification.result?.value?.editorText ?? "";
-    const observedFallback = postVerification.result?.value?.fallbackValue ?? "";
-    const observedActive = postVerification.result?.value?.activeValue ?? "";
-    observedLength = Math.max(
-      observedEditor.length,
-      observedFallback.length,
-      observedActive.length,
+          returnByValue: true,
+        });
+        const observedEditor = postVerification.result?.value?.editorText ?? "";
+        const observedFallback = postVerification.result?.value?.fallbackValue ?? "";
+        const observedActive = postVerification.result?.value?.activeValue ?? "";
+        observedLength = Math.max(
+          observedEditor.length,
+          observedFallback.length,
+          observedActive.length,
+        );
+      }
+    }
+    const promptLength = prompt.length;
+    if (promptLength >= 50_000 && observedLength > 0 && observedLength < promptLength - 2_000) {
+      // Learned: very large prompts can truncate silently; fail fast so we can fall back to file uploads.
+      await logDomFailure(runtime, logger, "prompt-too-large");
+      throw new BrowserAutomationError(
+        "Prompt appears truncated in the composer (likely too large).",
+        {
+          stage: "submit-prompt",
+          code: "prompt-too-large",
+          promptLength,
+          observedLength,
+        },
+      );
+    }
+
+    if (deps.webSearch) await activateWebSearch(runtime, input, prompt, logger);
+    await warnIfChatListRateLimited(runtime, logger);
+
+    // Install before the click: a short answer can complete while commit verification runs.
+    await runtime
+      .evaluate({
+        expression: buildInstallCompletionAnnouncementExpression(deps.baselineTurns),
+        returnByValue: true,
+      })
+      .catch(() => undefined);
+
+    const clicked = await attemptSendButton(
+      runtime,
+      input,
+      logger,
+      deps?.attachmentNames,
+      deps?.attachmentTimeoutMs,
+      deps?.page,
+      deps?.attachmentNavigationUrl,
+      integrityKey,
     );
-  }
-  const promptLength = prompt.length;
-  if (promptLength >= 50_000 && observedLength > 0 && observedLength < promptLength - 2_000) {
-    // Learned: very large prompts can truncate silently; fail fast so we can fall back to file uploads.
-    await logDomFailure(runtime, logger, "prompt-too-large");
-    throw new BrowserAutomationError(
-      "Prompt appears truncated in the composer (likely too large).",
-      {
-        stage: "submit-prompt",
-        code: "prompt-too-large",
-        promptLength,
-        observedLength,
-      },
+    if (!clicked) {
+      await assertIntegrity();
+      await dispatchEnterKey(input);
+      logger("Submitted prompt via Enter key");
+    } else {
+      logger("Activated send button");
+    }
+    await deps.onPromptSubmitted?.();
+
+    const commitTimeoutMs = Math.max(60_000, deps.inputTimeoutMs ?? 0);
+    // Learned: the send button can succeed but the turn doesn't appear immediately; verify commit via turns/stop button.
+    return await verifyPromptCommitted(
+      runtime,
+      prompt,
+      commitTimeoutMs,
+      logger,
+      deps.baselineTurns ?? undefined,
     );
+  } finally {
+    if (integrityKey)
+      await runtime
+        .evaluate({ expression: `delete globalThis[${JSON.stringify(integrityKey)}]` })
+        .catch(() => undefined);
   }
+}
 
-  if (deps.webSearch) await activateWebSearch(runtime, input, prompt, logger);
-  await warnIfChatListRateLimited(runtime, logger);
-
-  // Install before the click: a short answer can complete while commit verification runs.
-  await runtime
-    .evaluate({
-      expression: buildInstallCompletionAnnouncementExpression(deps.baselineTurns),
-      returnByValue: true,
-    })
-    .catch(() => undefined);
-
-  const clicked = await attemptSendButton(
-    runtime,
-    input,
-    logger,
-    deps?.attachmentNames,
-    deps?.attachmentTimeoutMs,
-    deps?.page,
-    deps?.attachmentNavigationUrl,
-  );
-  if (!clicked) {
-    await dispatchEnterKey(input);
-    logger("Submitted prompt via Enter key");
-  } else {
-    logger("Activated send button");
-  }
-  await deps.onPromptSubmitted?.();
-
-  const commitTimeoutMs = Math.max(60_000, deps.inputTimeoutMs ?? 0);
-  // Learned: the send button can succeed but the turn doesn't appear immediately; verify commit via turns/stop button.
-  return await verifyPromptCommitted(
-    runtime,
-    prompt,
-    commitTimeoutMs,
-    logger,
-    deps.baselineTurns ?? undefined,
+function composerIntegrityError(): BrowserAutomationError {
+  return new BrowserAutomationError(
+    "Strict prompt composer content, editor identity or attachments changed; nothing was sent.",
+    {
+      stage: "submit-prompt",
+      code: "prompt-composer-integrity",
+    },
   );
 }
 
@@ -725,6 +764,7 @@ async function attemptSendButton(
   attachmentTimeoutMs?: number | null,
   Page?: ChromeClient["Page"],
   attachmentNavigationUrl?: string,
+  integrityKey?: string,
 ): Promise<boolean> {
   const needAttachment = Array.isArray(attachmentNames) && attachmentNames.length > 0;
   if (needAttachment && !attachmentNavigationUrl) {
@@ -778,6 +818,7 @@ async function attemptSendButton(
       if (!hit || !button.contains(hit)) return { status: 'settling' };
       return { status: 'point', x, y };
     }
+    ${integrityKey ? `if (!${buildCheckComposerIntegrity(integrityKey)}) return { status: 'integrity-failed' };` : ""}
     // Last-resort fallback for unusual DOMs where the button is visible but has no useful rect.
     dispatchClickSequence(button);
     return { status: 'clicked' };
@@ -836,10 +877,15 @@ async function attemptSendButton(
     }
     const { result } = await Runtime.evaluate({ expression: script, returnByValue: true });
     const value = result.value as
-      | { status?: "clicked" | "missing" | "point" | "settling"; x?: number; y?: number }
+      | {
+          status?: "clicked" | "missing" | "point" | "settling" | "integrity-failed";
+          x?: number;
+          y?: number;
+        }
       | string
       | undefined;
     const status = typeof value === "string" ? value : value?.status;
+    if (status === "integrity-failed") throw composerIntegrityError();
     if (status === "point" || status === "settling") foundButton = true;
     if (
       status === "point" &&
@@ -856,7 +902,7 @@ async function attemptSendButton(
         await delay(150);
         continue;
       }
-      await clickTrustedPoint(Runtime, Input, value.x, value.y);
+      await clickTrustedPoint(Runtime, Input, value.x, value.y, integrityKey);
       return true;
     }
     if (status === "clicked") {
@@ -1134,15 +1180,24 @@ async function clickTrustedPoint(
   Input: ChromeClient["Input"],
   x: number,
   y: number,
+  integrityKey?: string,
 ): Promise<void> {
   if (Input && typeof Input.dispatchMouseEvent === "function") {
     await Input.dispatchMouseEvent({ type: "mouseMoved", x, y });
+    if (integrityKey) {
+      const result = await Runtime.evaluate({
+        expression: buildCheckComposerIntegrity(integrityKey),
+        returnByValue: true,
+      });
+      if (result.result?.value !== true) throw composerIntegrityError();
+    }
     await Input.dispatchMouseEvent({ type: "mousePressed", x, y, button: "left", clickCount: 1 });
     await Input.dispatchMouseEvent({ type: "mouseReleased", x, y, button: "left", clickCount: 1 });
     return;
   }
-  await Runtime.evaluate({
+  const clicked = await Runtime.evaluate({
     expression: `(() => {
+      ${integrityKey ? `if (!${buildCheckComposerIntegrity(integrityKey)}) return false;` : ""}
       const el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
       if (!(el instanceof HTMLElement)) return false;
       el.click();
@@ -1150,6 +1205,7 @@ async function clickTrustedPoint(
     })()`,
     returnByValue: true,
   });
+  if (integrityKey && clicked.result?.value !== true) throw composerIntegrityError();
 }
 
 function sendButtonTimeoutMs(

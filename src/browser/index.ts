@@ -1700,6 +1700,7 @@ async function runBrowserModeInternal(
         attachmentNames: attachmentExpectations,
         attachmentNavigationUrl,
         onPromptSubmitted: markPromptSubmitted,
+        strictCapture: strictAnswerCapture,
         webSearch: config.researchMode === "search",
       };
       const deepResearchTargetBaseline =
@@ -3431,6 +3432,7 @@ async function runRemoteBrowserMode(
         attachmentNames: attachmentExpectations,
         attachmentNavigationUrl,
         onPromptSubmitted: markPromptSubmitted,
+        strictCapture: strictAnswerCapture,
         webSearch: config.researchMode === "search",
       };
       const deepResearchTargetBaseline =
