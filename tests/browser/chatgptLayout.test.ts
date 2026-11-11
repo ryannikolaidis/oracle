@@ -60,14 +60,22 @@ function evaluate(expression: string, document: FakeDocument): unknown {
     document,
     FakeElement,
     { getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) },
-    { pathname: "/", origin: "https://chatgpt.com" },
+    { href: "https://chatgpt.com/", pathname: "/", origin: "https://chatgpt.com" },
   );
 }
 function runtime(document: FakeDocument): ChromeClient["Runtime"] {
   return {
-    evaluate: async ({ expression }: { expression: string }) => ({
-      result: { value: evaluate(expression, document) },
-    }),
+    evaluate: async ({
+      expression,
+      awaitPromise,
+    }: {
+      expression: string;
+      awaitPromise?: boolean;
+    }) => {
+      const value = evaluate(expression, document);
+      if (value instanceof Promise) expect(awaitPromise).toBe(true);
+      return { result: { value: await value } };
+    },
   } as unknown as ChromeClient["Runtime"];
 }
 

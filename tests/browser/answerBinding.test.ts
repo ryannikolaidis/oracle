@@ -263,20 +263,30 @@ test("installs continuity observation atomically with the observed prompt read",
     disconnect() {}
   }
   const runtime = {
-    evaluate: async ({ expression }: { expression: string }) => ({
-      result: {
-        value: new Function(
-          "document",
-          "location",
-          "globalThis",
-          "MutationObserver",
-          "crypto",
-          `return ${expression}`,
-        )(document, { href: "https://chatgpt.com/c/conversation-original" }, registry, Observer, {
-          randomUUID: () => "observation-original",
-        }),
-      },
-    }),
+    evaluate: async ({
+      expression,
+      awaitPromise,
+    }: {
+      expression: string;
+      awaitPromise?: boolean;
+    }) => {
+      const value = new Function(
+        "document",
+        "location",
+        "globalThis",
+        "MutationObserver",
+        "crypto",
+        `return ${expression}`,
+      )(document, { href: "https://chatgpt.com/c/conversation-original" }, registry, Observer, {
+        randomUUID: () => "observation-original",
+      });
+      if (value instanceof Promise) {
+        expect(awaitPromise).toBe(true);
+        // The observer must be installed before the async expression yields.
+        expect(observers).toHaveLength(1);
+      }
+      return { result: { value: await value } };
+    },
   } as unknown as ChromeClient["Runtime"];
   const ordinary = await readSubmittedPromptEvidence(runtime, []);
   expect(ordinary?.sha256).toBe(receipt.sha256);
