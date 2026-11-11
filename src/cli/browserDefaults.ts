@@ -43,6 +43,7 @@ export interface BrowserDefaultsOptions {
   browserResearch?: BrowserResearchMode;
   browserCaptureProviderNative?: boolean;
   browserArchive?: BrowserArchiveMode;
+  browserAnswerCapture?: "dom-text" | "json-code";
   browserManualLogin?: boolean;
   browserManualLoginProfileDir?: string | null;
   browserManualLoginCookieSync?: boolean;
@@ -188,6 +189,9 @@ export function applyBrowserDefaultsFromConfig(
   }
   if (isUnset("browserResearch") && browser.researchMode !== undefined) {
     options.browserResearch = browser.researchMode;
+  }
+  if (isUnset("browserAnswerCapture") && browser.answerCapture !== undefined) {
+    options.browserAnswerCapture = browser.answerCapture;
   }
   if (isUnset("browserArchive") && browser.archiveConversations !== undefined) {
     options.browserArchive = browser.archiveConversations;

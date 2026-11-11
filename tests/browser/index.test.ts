@@ -781,6 +781,39 @@ describe("browser follow-ups", () => {
     ).rejects.toThrow(/cannot be combined.*remote Chrome/i);
   });
 
+  test.each([
+    { researchMode: "deep" as const, followUpPrompts: [] },
+    { researchMode: undefined, followUpPrompts: ["challenge this answer"] },
+  ])(
+    "json-code refuses unsupported transcript shapes before connecting: %o",
+    async ({ researchMode, followUpPrompts }) => {
+      await expect(
+        runBrowserMode({
+          prompt: "review this",
+          followUpPrompts,
+          config: { answerCapture: "json-code", researchMode },
+        }),
+      ).rejects.toThrow(/single observed user\/assistant relationship/);
+    },
+  );
+
+  test.each([undefined, "dom-text"] as const)(
+    "ordinary follow-ups reach existing configuration validation with capture=%s",
+    async (answerCapture) => {
+      await expect(
+        runBrowserMode({
+          prompt: "review this",
+          followUpPrompts: ["challenge this answer"],
+          config: {
+            answerCapture,
+            copyProfileSource: "/tmp/source-profile",
+            remoteChrome: { host: "127.0.0.1", port: 9222 },
+          },
+        }),
+      ).rejects.toThrow(/cannot be combined.*remote Chrome/i);
+    },
+  );
+
   test("rejects Deep Research follow-ups before launching Chrome", async () => {
     await expect(
       runBrowserMode({
@@ -980,6 +1013,109 @@ describe("shouldPreferSystemTmpDirForTest", () => {
 });
 
 describe("runSubmissionWithRecoveryForTest", () => {
+  test("strict capture refuses uploads before connecting, including remote Chrome", async () => {
+    for (const remoteChrome of [undefined, { host: "127.0.0.1", port: 1 }]) {
+      await expect(
+        runBrowserMode({
+          prompt: "review",
+          attachments: [{ path: "/absent/source.txt", displayPath: "source.txt" }],
+          config: { answerCapture: "json-code", remoteChrome },
+        }),
+      ).rejects.toThrow(/cannot attest uploaded attachment/);
+    }
+  });
+
+  test("strict capture never submits an attachment-free fallback prompt", async () => {
+    const tooLarge = new BrowserAutomationError("too large", { code: "prompt-too-large" });
+    const submit = vi.fn().mockRejectedValueOnce(tooLarge).mockResolvedValue({
+      baselineTurns: 1,
+      baselineAssistantText: "",
+    });
+    const clear = vi.fn(async () => {});
+    await expect(
+      runSubmissionWithRecoveryForTest({
+        prompt: "original prompt",
+        attachments: [],
+        answerCapture: "json-code",
+        fallbackSubmission: { prompt: "different prompt", attachments: [] },
+        submit,
+        reloadPromptComposer: vi.fn(async () => {}),
+        prepareFallbackSubmission: clear,
+        logger: vi.fn<(message: string) => void>(),
+      }),
+    ).rejects.toThrow(/cannot substitute a fallback prompt/);
+    expect(submit).toHaveBeenCalledExactlyOnceWith("original prompt", []);
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  test("strict capture refuses fallback preparation before touching the composer", async () => {
+    const attachments: Array<{ path: string; displayPath: string }> = [];
+    const prepare = vi.fn(async () => {
+      attachments.push({ path: "/absent/bundle.txt", displayPath: "bundle.txt" });
+    });
+    const submit = vi
+      .fn()
+      .mockRejectedValue(new BrowserAutomationError("too large", { code: "prompt-too-large" }));
+    const clear = vi.fn(async () => {});
+    await expect(
+      runSubmissionWithRecoveryForTest({
+        prompt: "inline",
+        attachments: [],
+        answerCapture: "json-code",
+        fallbackSubmission: { prompt: "uploaded", attachments, prepare },
+        submit,
+        reloadPromptComposer: vi.fn(async () => {}),
+        prepareFallbackSubmission: clear,
+        logger: (_message: string) => {},
+      }),
+    ).rejects.toThrow(/cannot substitute a fallback prompt/);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(submit).toHaveBeenCalledOnce();
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  test.each([undefined, "dom-text", "json-code"] as const)(
+    "upload fallback respects capture=%s without changing successful inline submission",
+    async (answerCapture) => {
+      const prepared = vi.fn(async () => {});
+      const clear = vi.fn(async () => {});
+      const successful = { baselineTurns: 1, baselineAssistantText: "" };
+      const submit = vi.fn().mockResolvedValue(successful);
+      const args = {
+        prompt: "inline",
+        attachments: [],
+        answerCapture,
+        fallbackSubmission: {
+          prompt: "uploaded",
+          attachments: [{ path: "/absent/source.txt", displayPath: "source.txt" }],
+          prepare: prepared,
+        },
+        submit,
+        reloadPromptComposer: vi.fn(async () => {}),
+        prepareFallbackSubmission: clear,
+        logger: vi.fn(),
+      };
+      await expect(runSubmissionWithRecoveryForTest(args)).resolves.toEqual(successful);
+      expect(prepared).not.toHaveBeenCalled();
+      submit.mockClear();
+      submit.mockRejectedValueOnce(
+        new BrowserAutomationError("too large", { code: "prompt-too-large" }),
+      );
+      if (answerCapture === "json-code") {
+        await expect(runSubmissionWithRecoveryForTest(args)).rejects.toThrow(
+          /cannot substitute a fallback prompt/,
+        );
+        expect(submit).toHaveBeenCalledOnce();
+        expect(prepared).not.toHaveBeenCalled();
+        expect(clear).not.toHaveBeenCalled();
+      } else {
+        await expect(runSubmissionWithRecoveryForTest(args)).resolves.toEqual(successful);
+        expect(submit).toHaveBeenLastCalledWith("uploaded", args.fallbackSubmission.attachments);
+        expect(prepared).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   test("rejects colliding fallback basenames before preparing or submitting fallback", async () => {
     const submit = vi
       .fn()

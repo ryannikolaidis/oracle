@@ -1,4 +1,9 @@
 import http from "node:http";
+import {
+  assertSupportedAnswerCapture,
+  assertAttestableAttachments,
+  verifyStrictCaptureResult,
+} from "../browser/strictCapture.js";
 import { createReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import os from "node:os";
@@ -321,6 +326,14 @@ export async function createRemoteServer(
     let model: string | undefined;
     try {
       model = resolveRemoteBrowserModel(payload.options.model, payload.browserConfig?.desiredModel);
+      assertSupportedAnswerCapture(
+        payload.browserConfig?.answerCapture,
+        resolveBrowserProvider(model) ?? "chatgpt",
+      );
+      assertAttestableAttachments(payload.browserConfig?.answerCapture, payload.attachments ?? []);
+      // Strict capture cannot use upload fallback. Discard it before staging any files.
+      if (payload.browserConfig?.answerCapture === "json-code")
+        payload.fallbackSubmission = undefined;
       if (resolveBrowserProvider(model) === "gemini" && payload.options.imageOutputRequested) {
         throw new Error(
           "Remote Gemini image generation and editing are not supported; run these requests locally.",
@@ -515,6 +528,8 @@ export async function createRemoteServer(
         followUpPrompts: payload.options.followUpPrompts,
       });
 
+      if (payload.browserConfig.answerCapture === "json-code")
+        verifyStrictCaptureResult(result, payload.prompt);
       signal?.throwIfAborted();
       const artifactRegistration = await registerRemoteArtifacts({
         runId,
@@ -986,6 +1001,7 @@ const CLIENT_BROWSER_CONFIG_FIELDS = [
   "modelStrategy",
   "thinkingTime",
   "researchMode",
+  "answerCapture",
   "archiveConversations",
   "resumeConversationUrl",
   "timeoutMs",
@@ -1073,6 +1089,7 @@ function sanitizeResult(
   ].map((artifact) => artifact.path);
   const imageCount = new Set(savedImagePaths).size;
   const sanitizeAnswer = (value: string | undefined): string | undefined => {
+    if (result.answerRelationship?.answerCapture === "json-code") return value;
     let sanitized = value;
     // Local save notices describe the host filesystem, not the client's transferred files.
     for (const imagePath of savedImagePaths) {
@@ -1103,6 +1120,13 @@ function sanitizeResult(
     conversationId: result.conversationId,
     promptSubmitted: result.promptSubmitted,
     submittedPromptHash: result.submittedPromptHash,
+    submittedPromptSha256: result.submittedPromptSha256,
+    submittedPromptLength: result.submittedPromptLength,
+    submittedPromptMessageId: result.submittedPromptMessageId,
+    submittedPromptConversationId: result.submittedPromptConversationId,
+    submittedPromptObservationId: result.submittedPromptObservationId,
+    promptAssociationFailure: result.promptAssociationFailure,
+    answerRelationship: result.answerRelationship,
     warnings: warnings.length > 0 ? warnings : undefined,
     chromePid: undefined,
     chromePort: undefined,

@@ -16,7 +16,7 @@ const evaluateImmediateModelSelectionExpression = (
   buttonLabel: string,
   composerLabel = "",
   proPillLabel = "",
-  modernCheckedModel?: string,
+  modernCheckedModel?: string | string[],
 ): unknown => {
   const expression = buildModelSelectionExpressionForTest(targetModel);
   const modelButton = {
@@ -24,14 +24,22 @@ const evaluateImmediateModelSelectionExpression = (
     innerText: buttonLabel,
     id: modernCheckedModel ? "current-model-trigger" : "",
   };
-  const currentRadio = modernCheckedModel ? { textContent: modernCheckedModel } : null;
+  const currentRadios = (
+    Array.isArray(modernCheckedModel)
+      ? modernCheckedModel
+      : modernCheckedModel
+        ? [modernCheckedModel]
+        : []
+  ).map((textContent) => ({ textContent }));
   const currentMenu = modernCheckedModel
     ? {
         getAttribute: (name: string) => (name === "aria-labelledby" ? modelButton.id : null),
+        querySelectorAll: (selector: string) =>
+          selector.includes('[role="menuitemradio"][aria-checked="true"]') ? currentRadios : [],
         querySelector: (selector: string) => {
           if (selector === "[data-model-picker-view]") return {};
           if (selector.includes('[data-model-picker-view] [role="menuitemradio"]')) {
-            return currentRadio;
+            return currentRadios[0] ?? null;
           }
           return null;
         },
@@ -207,6 +215,9 @@ const evaluateMenuModelSelectionExpression = async (
       return null;
     },
     querySelectorAll: (selector: string) => {
+      if (selector.includes('[role="menuitemradio"][aria-checked="true"]')) {
+        return modelOptions.filter((item) => item.getAttribute("aria-checked") === "true");
+      }
       if (selector.includes('role="menu"') || selector.includes("data-radix")) {
         return menus;
       }
@@ -1353,7 +1364,7 @@ describe("browser model selection matchers", () => {
   it("accepts a GPT-6 composer pill as the selected Latest model", () => {
     expect(evaluateImmediateModelSelectionExpression("Latest", "6 Pro")).toEqual({
       status: "already-selected",
-      label: "Latest",
+      label: "6 Pro",
     });
   });
 
@@ -1371,8 +1382,8 @@ describe("browser model selection matchers", () => {
     );
   });
 
-  it.each(["最新", "최신"])(
-    "matches the exact localized Latest radio %s without accepting GPT-5.6 Sol",
+  it.each(["GPT-6", "Latest", "最新", "최신"])(
+    "selects the exact Astra radio %s and preserves its observed label",
     async (label) => {
       const { labelTokens } = buildModelMatchersLiteralForTest("Latest");
       expect(labelTokens).toContain(label);
@@ -1399,6 +1410,83 @@ describe("browser model selection matchers", () => {
       /requires GPT-6 Astra/,
     );
   });
+
+  it("reads GPT-6 from the checked current picker without replacing it with Latest", () => {
+    expect(evaluateImmediateModelSelectionExpression("Latest", "Pro", "", "", "GPT-6")).toEqual({
+      status: "already-selected",
+      label: "GPT-6",
+    });
+  });
+
+  it.each(["Instant", "GPT-5.6 Sol", "GPT-6 Mini", "GPT-6 Pro", "GPT-6.1", "", "GPT-6 Latest"])(
+    "rejects the unsupported Astra radio %j in selection and readback",
+    async (label) => {
+      await expect(
+        evaluateMenuModelSelectionExpression("Latest", { label }),
+      ).resolves.toMatchObject({ status: "option-not-found" });
+      expect(
+        evaluateImmediateModelSelectionExpression("Latest", "6 Pro", "", "", [label]),
+      ).toBeInstanceOf(Promise);
+      expect(() => assertResolvedModelSelectionForTest("Latest", label)).toThrow(
+        /requires GPT-6 Astra/,
+      );
+    },
+  );
+
+  it.each(["6 Mini", "6 Pro Mini", "GPT-6.1 Pro", "6 Instant"])(
+    "does not infer Astra from the unknown composer label %s",
+    (label) => {
+      expect(evaluateImmediateModelSelectionExpression("Latest", label)).toBeInstanceOf(Promise);
+    },
+  );
+
+  it.each([{ models: [] }, { models: ["GPT-6", "GPT-5.6 Sol"] }, { models: ["GPT-6", "GPT-6"] }])(
+    "rejects missing or ambiguous checked identities $models despite a matching pill",
+    ({ models }) => {
+      expect(
+        evaluateImmediateModelSelectionExpression("Latest", "6 Pro", "", "", models),
+      ).toBeInstanceOf(Promise);
+    },
+  );
+
+  it("does not choose between two unselected compatible model radios", async () => {
+    await expect(
+      evaluateMenuModelSelectionExpression("Latest", [{ label: "GPT-6" }, { label: "Latest" }]),
+    ).resolves.toMatchObject({ status: "option-not-found" });
+  });
+
+  it.each(["GPT-6", "6 Pro", "6Pro", "6 High"])(
+    "retains the observed %s label in verified explicit-selection evidence",
+    async (label) => {
+      const runtime = {
+        evaluate: vi.fn().mockResolvedValue({
+          result: { value: { status: "switched", label } },
+        }),
+      };
+      await expect(
+        ensureModelSelection(runtime as never, "Latest", (_message: string) => {}, "select"),
+      ).resolves.toMatchObject({
+        requestedModel: "Latest",
+        resolvedLabel: label,
+        strategy: "select",
+        verified: true,
+      });
+    },
+  );
+
+  it.each([null, "", "GPT-6 Mini", "Instant", "GPT-5.6 Sol"])(
+    "refuses missing or wrong Astra identity %j after reported selection success",
+    async (label) => {
+      const runtime = {
+        evaluate: vi.fn().mockResolvedValue({
+          result: { value: { status: "switched", label } },
+        }),
+      };
+      await expect(
+        ensureModelSelection(runtime as never, "Latest", (_message: string) => {}, "select"),
+      ).rejects.toThrow(/requires GPT-6 Astra/);
+    },
+  );
 
   it("includes real pointer coordinates when opening version submenus", () => {
     const expression = buildModelSelectionExpressionForTest("GPT-5.6 Sol");

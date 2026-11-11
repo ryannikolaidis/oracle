@@ -1,3 +1,11 @@
+import { readStructuredAnswer } from "../structuredAnswer.js";
+import {
+  evaluateBoundAnswer,
+  hasAnswerBinding,
+  requireAnswerBinding,
+  recordBoundAnswer,
+  recheckBoundAnswer,
+} from "../answerBinding.js";
 import type { ChromeClient, BrowserLogger } from "../types.js";
 import {
   ACTION_BAR_COPY_BUTTON_SELECTOR,
@@ -11,6 +19,7 @@ import {
   STOP_BUTTON_SELECTORS,
 } from "../constants.js";
 import {
+  buildAssistantMessageIdExpression,
   buildConversationTurnListExpression,
   buildLastAssistantMessageExpression,
 } from "../conversationTurns.js";
@@ -290,7 +299,7 @@ export async function waitForAssistantResponse(
     minTurnIndex,
     expectedConversationId,
   );
-  const evaluationPromise = Runtime.evaluate({
+  const evaluationPromise = evaluateBoundAnswer(Runtime, {
     expression,
     awaitPromise: true,
     returnByValue: true,
@@ -460,7 +469,7 @@ export async function readAssistantSnapshot(
   minTurnIndex?: number,
   expectedConversationId?: string,
 ): Promise<AssistantSnapshot | null> {
-  const { result } = await Runtime.evaluate({
+  const { result } = await evaluateBoundAnswer(Runtime, {
     expression: buildAssistantSnapshotExpression(minTurnIndex, expectedConversationId),
     returnByValue: true,
   });
@@ -486,11 +495,25 @@ export async function captureAssistantMarkdown(
   meta: { messageId?: string | null; turnId?: string | null },
   logger: BrowserLogger,
 ): Promise<string | null> {
-  const { result } = await Runtime.evaluate({
-    expression: buildCopyExpression(meta),
-    returnByValue: true,
-    awaitPromise: true,
-  });
+  if (hasAnswerBinding(Runtime)) {
+    // Page-global clipboard writes cannot prove which message supplied the bytes.
+    // Bound sessions use only text read from the selected assistant DOM.
+    const snapshot = await readAssistantSnapshot(Runtime);
+    if (!meta.messageId || snapshot?.messageId !== meta.messageId) {
+      throw new Error("Cannot capture bound answer: unrelated or missing assistant identity");
+    }
+    const content = snapshot.contentText ?? snapshot.text;
+    return typeof content === "string" ? content : null;
+  }
+  const { result } = await evaluateBoundAnswer(
+    Runtime,
+    {
+      expression: buildCopyExpression(meta, false),
+      returnByValue: true,
+      awaitPromise: true,
+    },
+    meta.messageId ?? null,
+  );
   if (result?.value?.success && typeof result.value.markdown === "string") {
     return result.value.fileCard
       ? result.value.markdown.replace(/:chatgpt-content-reference\{index="\d+"\}/g, "")
@@ -844,7 +867,11 @@ function buildTurnActionLocatorJs(fnName: string): string {
     const safe = control => !control.closest('[data-user-message-bubble], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"], [data-message-author-role="user"], pre, code');
     const inside = Array.from((assistant || turn).querySelectorAll(inTurnSelector)).find(safe);
     if (inside) return inside;
-    const exchange = assistant?.closest?.(${exchangeLiteral}) || turn;
+    // Reuse the canonical exchange selected by turn enumeration. A nested
+    // assistant can carry its own key while the controls remain on that exchange.
+    const exchange = turn?.matches?.(${exchangeLiteral})
+      ? turn
+      : assistant?.closest?.(${exchangeLiteral}) || turn;
     if (!exchange) return null;
     return Array.from(exchange.querySelectorAll(besideSelector)).find(
       (control) =>
@@ -906,7 +933,7 @@ function buildCompletionVisibilityExpression(
         ...Array.from(lastAssistantTurn.querySelectorAll('[data-message-id], [data-testid], [data-content-search-unit-key], [data-chatgpt-search-unit-key], [data-turn-key]')),
       ];
       const identityMatches = identityNodes.some((node) =>
-        (EXPECTED_MESSAGE_ID && (node.getAttribute?.('data-message-id') || node.getAttribute?.('data-chatgpt-selection-message-id') || node.getAttribute?.('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute?.('data-content-search-unit-key') || node.getAttribute?.('data-chatgpt-search-unit-key')) === EXPECTED_MESSAGE_ID) ||
+        (EXPECTED_MESSAGE_ID && ${buildAssistantMessageIdExpression()} === EXPECTED_MESSAGE_ID) ||
         (EXPECTED_TURN_ID && (node.getAttribute?.('data-turn-key') || node.getAttribute?.('data-testid')) === EXPECTED_TURN_ID),
       );
       if (!identityMatches) return false;
@@ -1419,7 +1446,7 @@ function buildAssistantExtractor(functionName: string): string {
         .map(node => node.getAttribute('aria-label').slice('Open preview of '.length));
       const text = innerText.trim().length > 0 ? innerText : textContent.trim().length > 0 ? textContent : fileNames.join('\\n');
       const html = fileNames.length > 0 ? messageRoot.innerHTML : contentRoot?.innerHTML ?? '';
-      const messageId = messageRoot.getAttribute('data-message-id') || messageRoot.getAttribute?.('data-chatgpt-selection-message-id') || messageRoot.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || messageRoot.getAttribute('data-content-search-unit-key') || messageRoot.getAttribute('data-chatgpt-search-unit-key');
+      const messageId = ${buildAssistantMessageIdExpression("messageRoot")};
       const turnId = turn.getAttribute('data-turn-key') || messageRoot.getAttribute('data-testid');
       const generatedImages = Array.from(messageRoot.querySelectorAll('img')).filter((img) =>
         String(img?.src || '').includes('/backend-api/estuary/content?id=file_')
@@ -1447,7 +1474,7 @@ function buildAssistantExtractor(functionName: string): string {
         /^(?:reasoning\\s+|pro thinking\\s+)?thought for \\d+(?:\\.\\d+)?\\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)\\s+edit$/.test(normalizedText);
       if (generatedImages.length > 0 && imageOnlyChrome) {
         const label = generatedImages.length === 1 ? 'Generated image.' : \`Generated \${generatedImages.length} images.\`;
-        return { text: label, html: messageRoot?.innerHTML ?? html, messageId, turnId, turnIndex: index };
+        return { text: label, contentText: '', html: messageRoot?.innerHTML ?? html, messageId, turnId, turnIndex: index };
       }
       if (text.trim()) {
         return { text, html, messageId, turnId, turnIndex: index };
@@ -1619,14 +1646,33 @@ function buildMarkdownFallbackExtractor(minTurnLiteral?: string): string {
   })`;
 }
 
-function buildCopyExpression(meta: { messageId?: string | null; turnId?: string | null }): string {
+function buildCopyExpression(
+  meta: { messageId?: string | null; turnId?: string | null },
+  strictIdentity = false,
+): string {
   return `(() => {
     ${buildClickDispatcher()}
     const BUTTON_SELECTOR = '${COPY_BUTTON_SELECTOR}';
     const TIMEOUT_MS = 10000;
+    ${buildTurnActionLocatorJs("findBoundAction")}
+    const findBoundTurnAction = turn => findBoundAction(turn, BUTTON_SELECTOR, ${JSON.stringify(ACTION_BAR_COPY_BUTTON_SELECTOR)});
 
     const locateButton = () => {
       const hint = ${JSON.stringify(meta ?? {})};
+      if (${strictIdentity}) {
+        if (!hint.messageId) return null;
+        const identity = node => node.getAttribute('data-message-id') || node.getAttribute('data-chatgpt-selection-message-id') || node.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute('data-content-search-unit-key') || node.getAttribute('data-chatgpt-search-unit-key');
+        const messages = Array.from(document.querySelectorAll(${JSON.stringify(ASSISTANT_ROLE_SELECTOR)}));
+        const matches = messages.filter(node => identity(node) === hint.messageId);
+        if (matches.length !== 1) return null;
+        const message = matches[0];
+        const turn = message.closest(${JSON.stringify(CONVERSATION_TURN_SELECTOR)}) || message;
+        // A turn-wide action is usable only when it belongs to this sole assistant.
+        if (messages.some(node => node !== message && turn.contains(node))) return null;
+        return Array.from(message.querySelectorAll(BUTTON_SELECTOR)).at(-1) ||
+          findBoundTurnAction(turn);
+      }
+
       if (hint?.messageId) {
         const node = Array.from(document.querySelectorAll('[data-message-id], [data-content-search-unit-key], [data-chatgpt-search-message-ids]')).find(node => (node.getAttribute('data-message-id') || node.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || node.getAttribute('data-content-search-unit-key')) === hint.messageId)?.closest('[data-turn-key]') || Array.from(document.querySelectorAll('[data-message-id]')).find(node => node.getAttribute('data-message-id') === hint.messageId);
         const buttons = node ? Array.from(node.querySelectorAll('${COPY_BUTTON_SELECTOR}')) : [];
@@ -1807,6 +1853,8 @@ function buildCopyExpression(meta: { messageId?: string | null; turnId?: string 
 
 interface AssistantSnapshot {
   text?: string;
+  /** Assistant content when text is a synthetic image-completion label. */
+  contentText?: string;
   html?: string;
   messageId?: string | null;
   turnId?: string | null;
@@ -1860,4 +1908,49 @@ function cleanAssistantText(text: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+type AnswerCaptureMode = "dom-text" | "json-code";
+
+async function readFinalAnswerSnapshot(
+  Runtime: ChromeClient["Runtime"],
+  mode: AnswerCaptureMode,
+): Promise<AssistantSnapshot | null> {
+  if (mode === "json-code") return readStructuredAnswer(Runtime);
+  if (mode === "dom-text") return readAssistantSnapshot(Runtime);
+  throw new Error("Unknown bound answer capture mode");
+}
+
+/** Discard recovery candidates in favor of a fresh, identity-bound final capture. */
+export async function finalizeBoundAssistantAnswer(
+  Runtime: ChromeClient["Runtime"],
+  _logger: BrowserLogger,
+  mode: AnswerCaptureMode = "dom-text",
+) {
+  requireAnswerBinding(Runtime);
+  const snapshot = await readFinalAnswerSnapshot(Runtime, mode);
+  if (!snapshot?.text || !snapshot.messageId)
+    throw new Error("No identifiable assistant answer for observed user turn");
+  const text = snapshot.contentText ?? snapshot.text;
+  const answerMarkdown = text;
+  recordBoundAnswer(Runtime, snapshot, text, answerMarkdown, mode);
+  const fresh = await readFinalAnswerSnapshot(Runtime, mode);
+  const answerRelationship = recheckBoundAnswer(Runtime, fresh, text, answerMarkdown);
+  return {
+    text,
+    markdown: answerMarkdown,
+    html: snapshot.html ?? "",
+    messageId: snapshot.messageId,
+    answerRelationship,
+  };
+}
+
+export async function verifyBoundAssistantReturn(
+  Runtime: ChromeClient["Runtime"],
+  text: string,
+  markdown: string,
+  mode: AnswerCaptureMode = "dom-text",
+) {
+  requireAnswerBinding(Runtime);
+  return recheckBoundAnswer(Runtime, await readFinalAnswerSnapshot(Runtime, mode), text, markdown);
 }

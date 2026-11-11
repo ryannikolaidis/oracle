@@ -133,6 +133,8 @@ export interface BrowserAutomationConfig {
   researchMode?: BrowserResearchMode;
   /** Archive completed ChatGPT conversations after local artifacts are saved. */
   archiveConversations?: BrowserArchiveMode;
+  /** Literal JSON code-body capture; dom-text retains the legacy rendered representation. */
+  answerCapture?: "dom-text" | "json-code";
   /** Existing ChatGPT conversation URL to open before submitting the prompt. */
   resumeConversationUrl?: string | null;
   /** Capture ChatGPT's own conversation document plus independent per-turn digests. */
@@ -232,7 +234,21 @@ export interface BrowserRunResult {
   tabUrl?: string;
   conversationId?: string;
   promptSubmitted?: boolean;
+  /** Failure-only association diagnostics; never successful submission evidence. */
+  promptAssociationFailure?: import("./promptFingerprint.js").PromptAssociationFailure | null;
   submittedPromptHash?: string | null;
+  /** SHA-256 hex of observed user-turn text: CRLF/lone CR to LF, UTF-8, no other normalization. */
+  submittedPromptSha256?: string | null;
+  /** UTF-8 byte length of the same normalized observed text; null without fresh evidence. */
+  submittedPromptLength?: number | null;
+  /** Stable DOM identity of the same freshly selected user turn; null without fresh evidence. */
+  submittedPromptMessageId?: string | null;
+  /** Conversation observed atomically with the submitted user turn. */
+  submittedPromptConversationId?: string | null;
+  /** Live DOM observation token; navigation loses continuity and requires a fresh run. */
+  submittedPromptObservationId?: string | null;
+  /** Verified DOM relationship and hashes of the exact returned output. */
+  answerRelationship?: import("./answerBinding.js").AnswerRelationship | null;
   researchPlan?: BrowserResearchPlanMetadata;
   controllerPid?: number;
 }

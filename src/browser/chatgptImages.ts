@@ -687,3 +687,16 @@ export async function collectGeneratedImageArtifacts(params: {
     answerText: latestAnswerText,
   };
 }
+
+/** Default captures include image completion notices; strict payloads stay byte-exact. */
+export function mergeGeneratedImageAnswer(
+  answer: { answerText: string; answerMarkdown: string },
+  images: { answerText: string; markdownSuffix: string },
+  mode: "dom-text" | "json-code" = "dom-text",
+): { answerText: string; answerMarkdown: string } {
+  if (mode === "json-code") return answer;
+  return {
+    answerText: images.answerText || answer.answerText,
+    answerMarkdown: answer.answerMarkdown + images.markdownSuffix,
+  };
+}

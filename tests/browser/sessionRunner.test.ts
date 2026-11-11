@@ -200,6 +200,10 @@ describe("runBrowserSessionExecution", () => {
           chromeTargetId: "t-1",
           tabUrl: "https://chatgpt.com/c/foo",
           conversationId: "foo",
+          submittedPromptHash: "b".repeat(64),
+          submittedPromptSha256: "a".repeat(64),
+          submittedPromptLength: 123,
+          submittedPromptMessageId: "new-message",
         },
         {
           requestedModel: "Pro",
@@ -231,6 +235,10 @@ describe("runBrowserSessionExecution", () => {
         answerTokens: 12,
         answerChars: 20,
         conversationId: "foo",
+        submittedPromptHash: "b".repeat(64),
+        submittedPromptSha256: "a".repeat(64),
+        submittedPromptLength: 123,
+        submittedPromptMessageId: "new-message",
         researchPlan: {
           title: "Release status",
           steps: ["Read official sources"],
@@ -273,6 +281,10 @@ describe("runBrowserSessionExecution", () => {
       chromePid: undefined,
       conversationId: "foo",
       researchPlan: { title: "Release status", phase: "researching" },
+      submittedPromptHash: "b".repeat(64),
+      submittedPromptSha256: "a".repeat(64),
+      submittedPromptLength: 123,
+      submittedPromptMessageId: "new-message",
     });
     expect(result.artifacts).toEqual([
       { kind: "file", path: "/tmp/report.md", sha256: "a".repeat(64) },
@@ -282,7 +294,15 @@ describe("runBrowserSessionExecution", () => {
       expect.objectContaining({ path: "/tmp/report.md", sha256: "a".repeat(64) }),
     ]);
     expect(persistRuntimeHint).toHaveBeenCalledWith(
-      expect.objectContaining({ chromePort: 9999, chromeHost: "127.0.0.1", chromeTargetId: "t-1" }),
+      expect.objectContaining({
+        chromePort: 9999,
+        chromeHost: "127.0.0.1",
+        chromeTargetId: "t-1",
+        submittedPromptHash: "b".repeat(64),
+        submittedPromptSha256: "a".repeat(64),
+        submittedPromptLength: 123,
+        submittedPromptMessageId: "new-message",
+      }),
       expect.objectContaining({ resolvedLabel: "Pro", verified: true }),
     );
     expect(executeBrowser).toHaveBeenCalledWith(

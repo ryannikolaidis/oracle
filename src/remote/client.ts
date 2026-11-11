@@ -1,4 +1,9 @@
 import http from "node:http";
+import {
+  assertSupportedAnswerCapture,
+  assertAttestableAttachments,
+  verifyStrictCaptureResult,
+} from "../browser/strictCapture.js";
 import { createWriteStream } from "node:fs";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -45,10 +50,16 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
   return async function remoteBrowserExecutor(
     options: BrowserRunOptions,
   ): Promise<BrowserRunResult> {
+    const invocationPrompt = options.prompt;
     const model = resolveRemoteBrowserModel(
       options.model ?? runOptions?.model,
       options.config?.desiredModel,
     );
+    assertSupportedAnswerCapture(
+      options.config?.answerCapture,
+      resolveBrowserProvider(model) ?? "chatgpt",
+    );
+    assertAttestableAttachments(options.config?.answerCapture, options.attachments ?? []);
     const gemini = resolveBrowserProvider(model) === "gemini";
     if (
       gemini &&
@@ -89,9 +100,12 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
         );
     }
     const payload: RemoteRunPayload = {
-      prompt: options.prompt,
+      prompt: invocationPrompt,
       attachments: await serializeAttachments(options.attachments ?? []),
-      fallbackSubmission: await serializeFallback(options.fallbackSubmission, { host, token }),
+      fallbackSubmission:
+        options.config?.answerCapture === "json-code"
+          ? undefined
+          : await serializeFallback(options.fallbackSubmission, { host, token }),
       browserConfig: {
         ...options.config,
         // Keep old hosts fail-closed for Gemini even when the picker label is unrelated.
@@ -215,6 +229,8 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
                 fail(new Error("Remote browser run completed without a result."));
                 return;
               }
+              if (options.config?.answerCapture === "json-code")
+                verifyStrictCaptureResult(resolved, invocationPrompt);
               if (preferredImagePath) {
                 const images = transferredArtifacts.filter((artifact) => artifact.kind === "image");
                 if (

@@ -10,7 +10,6 @@ import { buildConsultBrowserConfig } from "../../src/mcp/tools/consult.js";
 import { createRemoteBrowserExecutor } from "../../src/remote/client.js";
 
 class Element extends FakeElement {
-  nodeType = 1;
   constructor(
     tag: string,
     readonly attrs: Record<string, string> = {},
@@ -21,12 +20,6 @@ class Element extends FakeElement {
   }
   get nodeName() {
     return this.tagName;
-  }
-  get childNodes(): Array<Element | { nodeType: number; textContent: string }> {
-    return [
-      ...(this.text ? [{ nodeType: 3, textContent: this.text }] : []),
-      ...(this.children as Element[]),
-    ];
   }
   cloneNode(): Element {
     return new Element(

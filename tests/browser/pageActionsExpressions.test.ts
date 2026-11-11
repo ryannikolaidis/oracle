@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { FakeDocument, FakeElement } from "./domFixture.js";
 import {
   buildAssistantExtractorForTest,
   buildAssistantSnapshotExpressionForTest,
@@ -38,75 +39,50 @@ describe("browser automation expressions", () => {
   });
 
   test("assistant extractor indexes top-level turns instead of nested role nodes", () => {
-    class FakeElement {
-      readonly dataset: Record<string, string> = {};
-
-      constructor(
-        private readonly attributes: Record<string, string>,
-        readonly innerText = "",
-        private readonly children: FakeElement[] = [],
-      ) {}
-
-      get textContent(): string {
-        return this.innerText;
-      }
-
-      get innerHTML(): string {
-        return this.innerText;
-      }
-
-      getAttribute(name: string): string | null {
-        return this.attributes[name] ?? null;
-      }
-
-      matches(): boolean {
-        return false;
-      }
-
-      querySelector(selector: string): FakeElement | null {
-        if (selector === ASSISTANT_ROLE_SELECTOR) {
-          return (
-            this.children.find(
-              (child) => child.getAttribute("data-message-author-role") === "assistant",
-            ) ?? null
-          );
-        }
-        return null;
-      }
-
-      querySelectorAll(): FakeElement[] {
-        return [];
-      }
-    }
-
-    const nestedUser = new FakeElement({ "data-message-author-role": "user" }, "old prompt");
+    const nestedUser = new FakeElement(
+      "div",
+      { "data-message-author-role": "user" },
+      [],
+      "old prompt",
+    );
     const nestedAssistant = new FakeElement(
+      "div",
       { "data-message-author-role": "assistant" },
+      [],
       "old answer",
     );
-    const userTurn = new FakeElement({ "data-testid": "conversation-turn-1" }, "old prompt", [
+    const userTurn = new FakeElement("article", { "data-testid": "conversation-turn-1" }, [
       nestedUser,
     ]);
-    const assistantTurn = new FakeElement({ "data-testid": "conversation-turn-2" }, "old answer", [
+    const assistantTurn = new FakeElement(
+      "article",
+      { "data-testid": "conversation-turn-2", "data-turn-key": "assistant-exchange" },
+      [nestedAssistant],
+    );
+    const document = new FakeDocument([userTurn, assistantTurn]);
+    expect(document.querySelectorAll(CONVERSATION_TURN_CONTAINER_SELECTOR)).toEqual([
+      userTurn,
+      assistantTurn,
+    ]);
+    expect(document.querySelectorAll(CONVERSATION_TURN_SELECTOR)).toEqual([
+      userTurn,
+      nestedUser,
+      assistantTurn,
       nestedAssistant,
     ]);
-    const document = {
-      querySelectorAll: (selector: string) => {
-        if (selector === CONVERSATION_TURN_CONTAINER_SELECTOR) return [userTurn, assistantTurn];
-        if (selector === CONVERSATION_TURN_SELECTOR) {
-          return [userTurn, nestedUser, assistantTurn, nestedAssistant];
-        }
-        return [];
-      },
-    };
     const expression = buildAssistantExtractorForTest("capture");
     const result = Function(
       "document",
       "HTMLElement",
       `${expression}; return capture();`,
-    )(document, FakeElement) as { text?: string; turnIndex?: number } | null;
+    )(document, FakeElement);
 
-    expect(result).toMatchObject({ text: "old answer", turnIndex: 1 });
+    expect(result).toMatchObject({
+      text: "old answer",
+      turnIndex: 1,
+      messageId: "assistant-exchange",
+      turnId: "assistant-exchange",
+    });
   });
 
   test("conversation debug expression references conversation selector", () => {

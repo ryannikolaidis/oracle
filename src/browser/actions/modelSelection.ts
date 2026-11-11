@@ -10,6 +10,7 @@ import { logDomFailure } from "../domDebug.js";
 import { buildClickDispatcher } from "./domEvents.js";
 import { throwIfThrottled } from "../chatgptThrottle.js";
 import { delay } from "../utils.js";
+import { ASTRA_MODEL_LABELS, ASTRA_COMPOSER_LABEL_PATTERN } from "./astraModelLabels.js";
 
 const LEGACY_PRO_VERSION_WORD_TOKENS = ["5 4", "5 2", "5 1", "5 0", "gpt 5 pro"] as const;
 const LEGACY_PRO_VERSION_COMPACT_TOKENS = ["gpt54", "gpt52", "gpt51", "gpt50"] as const;
@@ -88,8 +89,11 @@ export async function ensureModelSelection(
     case "already-selected":
     case "switched": {
       const observedLabel = result.label?.trim() || null;
-      if (strategy !== "current" && observedLabel !== null) {
-        assertResolvedModelSelection(desiredModel, observedLabel);
+      if (
+        strategy !== "current" &&
+        (observedLabel !== null || desiredModel.toLowerCase() === "latest")
+      ) {
+        assertResolvedModelSelection(desiredModel, observedLabel ?? "");
       }
       logger(`Model picker: ${observedLabel ?? "current model (label unavailable)"}`);
       return {
@@ -150,12 +154,11 @@ function assertResolvedModelSelection(desiredModel: string, resolvedLabel: strin
   const normalizedDesired = normalizeResolvedModelLabel(desired);
   const normalizedResolved = normalizeResolvedModelLabel(resolved);
   if (desired === "latest") {
-    // The advanced radio is localized, but only the documented exact labels are
-    // evidence of GPT-6 Astra. Do not let a generic picker result verify Latest.
+    // Accept only observed radio names or the bounded older composer label.
+    const label = resolvedLabel.normalize("NFC").trim();
     if (
-      resolvedLabel.normalize("NFC").trim() === "Latest" ||
-      resolvedLabel.normalize("NFC").trim() === "最新" ||
-      resolvedLabel.normalize("NFC").trim() === "최신"
+      ASTRA_MODEL_LABELS.some((candidate) => candidate === label) ||
+      new RegExp(ASTRA_COMPOSER_LABEL_PATTERN).test(label.toLowerCase())
     ) {
       return;
     }
@@ -282,12 +285,12 @@ function buildModelSelectionExpression(
     // "6 Pro" / "6 High"…, while GPT-5.6 Sol's reads "5.6 Pro". Declared up front: getResolvedLabel
     // runs on the picker-less path before the selection helpers below are initialized.
     const targetIsLatest = normalizedTarget === 'latest';
-    // ChatGPT localizes the Latest radio itself (for example, Japanese "最新") but
+    // ChatGPT names this radio GPT-6 or localizes Latest (for example, Japanese "最新") but
     // keeps the GPT-6 composer pill numeric. Keep this allow-list exact so GPT-5.6
     // Sol or an arbitrary localized menu row can never satisfy a Latest request.
     const isLatestModelLabel = (value) => {
       const label = String(value ?? '').normalize('NFC').trim();
-      return label === 'Latest' || label === '最新' || label === '최신';
+      return ${JSON.stringify(ASTRA_MODEL_LABELS)}.includes(label);
     };
     const normalizedTokens = Array.from(new Set([normalizedTarget, ...LABEL_TOKENS]))
       .map((token) => normalizeText(token))
@@ -441,8 +444,9 @@ function buildModelSelectionExpression(
     // "already selected" while GPT-5.6 Sol is active. Defined here, before getResolvedLabel, because
     // the "current" strategy resolves the label before the selection helpers further down exist.
     const latestButtonSelected = () => {
-      const label = normalizeText(getButtonLabel());
-      return /^(chatgpt |gpt )?6(?![0-9 .]*[0-9])/.test(label) && !/(^| )5 6/.test(label);
+      const label = getButtonLabel();
+      return isLatestModelLabel(label) ||
+        new RegExp(${JSON.stringify(ASTRA_COMPOSER_LABEL_PATTERN)}).test(label.toLowerCase());
     };
     const getComposerModelLabel = () =>
       (document.querySelector(COMPOSER_MODEL_SIGNAL_SELECTOR)?.textContent ?? '').trim();
@@ -629,19 +633,26 @@ function buildModelSelectionExpression(
           ? isLatestModelLabel(checkedLabel)
           : normalizedTokens.some((token) => token && normalizeText(checkedLabel) === token);
       }
-      return normalizedTokens.some((token) => token && label.includes(token));
+      return !targetIsLatest && normalizedTokens.some((token) => token && label.includes(token));
     };
     const findCheckedAdvancedModelRadio = (menu = null) => {
       const scope = menu || findUnifiedPickerMenu() || document;
-      return (
-        scope?.querySelector?.(
+      if (!targetIsLatest) {
+        return scope.querySelector?.(
           '[data-testid="composer-model-picker-slider-advanced-view"] [role="menuitemradio"][aria-checked="true"]',
-        ) ??
-        scope?.querySelector?.(
+        ) ?? scope.querySelector?.(
           '[data-model-picker-view] [role="menuitemradio"][aria-checked="true"]',
-        ) ??
-        null
-      );
+        ) ?? null;
+      }
+      const checked = Array.from(scope.querySelectorAll(
+        '[data-testid="composer-model-picker-slider-advanced-view"] [role="menuitemradio"][aria-checked="true"], [data-model-picker-view] [role="menuitemradio"][aria-checked="true"]',
+      ));
+      // An ambiguous checked state must not fall back to an apparently valid pill.
+      if (checked.length > 1 || (targetIsLatest && checked.length === 0 &&
+        scope !== document && scope.querySelector('[data-model-picker-view]'))) {
+        return { textContent: '' };
+      }
+      return checked[0] ?? null;
     };
     const getAdvancedModelLabel = () => {
       const opener = findModelSubmenuOpener(findUnifiedPickerMenu());
@@ -670,9 +681,10 @@ function buildModelSelectionExpression(
       if (targetIsLatest) {
         const checkedAdvancedRadio = findCheckedAdvancedModelRadio();
         if (checkedAdvancedRadio) return (checkedAdvancedRadio.textContent ?? '').trim();
-        // Picker closed: the pill ("6 Pro") is the evidence; report the radio's name so callers
-        // can compare against the requested target instead of the tier-suffixed pill text.
-        if (latestButtonSelected()) return 'Latest';
+        // Preserve the clicked radio name when its resulting pill verifies the switch.
+        // Otherwise report the actual pill, never a fabricated radio label.
+        if (latestButtonSelected()) return isLatestModelLabel(observedOptionLabel)
+          ? observedOptionLabel.trim() : getButtonLabel();
         const currentButtonLabel = getButtonLabel();
         if (currentButtonLabel) return currentButtonLabel;
         // No picker button at all (e.g. the "current" strategy on a page that hides it): fall back
@@ -1243,6 +1255,11 @@ function buildModelSelectionExpression(
       node?.getAttribute?.('data-has-submenu') !== null;
     const canTrustSelectedOption = (node, normalizedText, testid) => {
       if (!optionIsSelected(node)) return false;
+      if (targetIsLatest) {
+        const checked = findCheckedAdvancedModelRadio();
+        return isLatestModelLabel(node.textContent ?? '') &&
+          (!checked || isLatestModelLabel(checked.textContent ?? ''));
+      }
       if (getConfigurationDialog() && !configuredSelectionMatchesTarget()) return false;
       const optionVersion = versionFromLabel(normalizedText) ?? versionFromTestId(testid);
       if (desiredVersion && optionVersion !== desiredVersion) return false;
@@ -1263,6 +1280,7 @@ function buildModelSelectionExpression(
     const findBestOption = () => {
       // Walk through every menu item and keep whichever earns the highest score.
       let bestMatch = null;
+      const astraCandidates = new Set();
       const menus = queryPickerMenus();
       for (const menu of menus) {
         const buttons = Array.from(menu.querySelectorAll(${menuItemLiteral}));
@@ -1284,6 +1302,7 @@ function buildModelSelectionExpression(
           if (score <= 0) {
             continue;
           }
+          if (targetIsLatest) astraCandidates.add(option);
           if (canTrustSelectedOption(option, normalizedText, testid)) {
             score += 1000;
           }
@@ -1300,6 +1319,7 @@ function buildModelSelectionExpression(
           }
         }
       }
+      if (targetIsLatest && astraCandidates.size > 1) return null;
       return bestMatch;
     };
     const waitForTargetSelection = (previousButtonLabel, previousComposerSignal) => new Promise((resolve) => {
@@ -1572,9 +1592,7 @@ function buildModelMatchersLiteral(targetModel: string): {
     testIdTokens.add("gpt56");
   }
   if (base === "latest") {
-    // Exact Japanese and Korean labels for the advanced-model Latest radio.
-    push("最新", labelTokens);
-    push("최신", labelTokens);
+    for (const label of ASTRA_MODEL_LABELS) push(label, labelTokens);
   }
   // Numeric variations (5.5 <-> 55 <-> gpt-5-5)
   if (base.includes("5.5") || base.includes("5-5") || base.includes("55")) {

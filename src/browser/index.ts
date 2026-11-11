@@ -1,4 +1,20 @@
-import { readSubmittedPromptFingerprint, readUserMessageIds } from "./promptFingerprint.js";
+import { releasePromptObservation } from "./promptObservation.js";
+import { assertAttestableAttachments, verifyStrictCaptureResult } from "./strictCapture.js";
+import {
+  bindSubmittedAnswer,
+  requireAnswerBinding,
+  type AnswerRelationship,
+} from "./answerBinding.js";
+import {
+  finalizeBoundAssistantAnswer,
+  verifyBoundAssistantReturn,
+} from "./actions/assistantResponse.js";
+import {
+  readBoundSubmittedPromptEvidence,
+  readSubmittedPromptEvidence,
+  readUserMessageIds,
+  type PromptAssociationFailure,
+} from "./promptFingerprint.js";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -112,7 +128,7 @@ import {
   saveBrowserTranscriptArtifact,
   saveDeepResearchReportArtifact,
 } from "./artifacts.js";
-import { collectGeneratedImageArtifacts } from "./chatgptImages.js";
+import { collectGeneratedImageArtifacts, mergeGeneratedImageAnswer } from "./chatgptImages.js";
 import { collectChatGptFileArtifacts } from "./chatgptFiles.js";
 import { runProviderSubmissionFlow } from "./providerDomFlow.js";
 import { chatgptDomProvider } from "./providers/index.js";
@@ -542,6 +558,7 @@ async function runSubmissionWithRecovery({
   prompt,
   attachments,
   fallbackSubmission,
+  answerCapture,
   submit,
   reloadPromptComposer,
   prepareFallbackSubmission,
@@ -550,11 +567,13 @@ async function runSubmissionWithRecovery({
   prompt: string;
   attachments: BrowserAttachment[];
   fallbackSubmission?: BrowserSubmissionFallback;
+  answerCapture?: "dom-text" | "json-code";
   submit: (prompt: string, attachments: BrowserAttachment[]) => Promise<BrowserSubmissionResult>;
   reloadPromptComposer: () => Promise<void>;
   prepareFallbackSubmission: () => Promise<void>;
   logger: BrowserLogger;
 }): Promise<BrowserSubmissionResult> {
+  assertAttestableAttachments(answerCapture, attachments);
   let currentPrompt = prompt;
   let currentAttachments = attachments;
   let retriedDeadComposer = false;
@@ -573,11 +592,18 @@ async function runSubmissionWithRecovery({
 
       const isPromptTooLarge = hasBrowserErrorCode(error, "prompt-too-large");
       if (fallbackSubmission && isPromptTooLarge && !usedFallbackSubmission) {
+        if (answerCapture === "json-code") {
+          throw new Error(
+            "json-code cannot substitute a fallback prompt; use the original inline prompt",
+          );
+        }
+        assertAttestableAttachments(answerCapture, fallbackSubmission.attachments);
         usedFallbackSubmission = true;
         logger("[browser] Inline prompt too large; retrying with file uploads.");
         if (fallbackSubmission.prepare) {
           await fallbackSubmission.prepare();
         }
+        assertAttestableAttachments(answerCapture, fallbackSubmission.attachments);
         assertUniqueAttachmentBasenames(fallbackSubmission.attachments, {
           stage: "upload-fallback",
           subject: "The inline prompt was too large, but its upload fallback",
@@ -597,6 +623,7 @@ export async function runSubmissionWithRecoveryForTest(args: {
   prompt: string;
   attachments: BrowserAttachment[];
   fallbackSubmission?: BrowserSubmissionFallback;
+  answerCapture?: "dom-text" | "json-code";
   submit: (prompt: string, attachments: BrowserAttachment[]) => Promise<BrowserSubmissionResult>;
   reloadPromptComposer: () => Promise<void>;
   prepareFallbackSubmission: () => Promise<void>;
@@ -858,14 +885,26 @@ async function runBrowserModeInternal(
     subject: "Browser upload",
   });
 
-  const promptText = options.prompt?.trim();
-  if (!promptText) {
+  const invocationPrompt = options.prompt;
+  let config = resolveBrowserConfig(options.config);
+  const strictAnswerCapture = config.answerCapture === "json-code";
+  const promptText = strictAnswerCapture ? invocationPrompt : invocationPrompt?.trim();
+  if (!promptText?.trim()) {
     throw new Error("Prompt text is required when using browser mode.");
   }
 
   const fallbackSubmission = options.fallbackSubmission;
 
-  let config = resolveBrowserConfig(options.config);
+  const deepResearch = config.researchMode === "deep";
+  assertAttestableAttachments(config.answerCapture, attachments);
+  if (
+    strictAnswerCapture &&
+    (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0)
+  ) {
+    throw new Error(
+      "Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts",
+    );
+  }
   const usingCopiedProfile = Boolean(config.copyProfileSource);
   if (usingCopiedProfile && (config.attachRunning || config.remoteChrome)) {
     throw new BrowserAutomationError(
@@ -875,7 +914,7 @@ async function runBrowserModeInternal(
   }
   const isResumingConversation = Boolean(config.resumeConversationUrl);
   const followUpPrompts = normalizeBrowserFollowUpPrompts(options.followUpPrompts);
-  if (config.researchMode === "deep" && followUpPrompts.length > 0) {
+  if (deepResearch && followUpPrompts.length > 0) {
     throw new BrowserAutomationError(
       "Browser follow-ups are not supported with Deep Research mode. Put the full research plan into the initial prompt or run a normal browser consult for multi-turn review.",
       {
@@ -896,6 +935,13 @@ async function runBrowserModeInternal(
   let lastUrl: string | undefined;
   let promptSubmitted = false;
   let submittedPromptHash: string | null = null;
+  let submittedPromptSha256: string | null = null;
+  let submittedPromptLength: number | null = null;
+  let submittedPromptMessageId: string | null = null;
+  let submittedPromptConversationId: string | null = null;
+  let submittedPromptObservationId: string | null = null;
+  let answerRelationship: AnswerRelationship | null = null;
+  let promptAssociationFailure: PromptAssociationFailure | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -917,6 +963,13 @@ async function runBrowserModeInternal(
       conversationId,
       promptSubmitted,
       submittedPromptHash,
+      submittedPromptSha256,
+      submittedPromptLength,
+      submittedPromptMessageId,
+      submittedPromptConversationId,
+      submittedPromptObservationId,
+      answerRelationship,
+      promptAssociationFailure,
       ownedRecoveryTarget,
       userDataDir,
       controllerPid: process.pid,
@@ -938,6 +991,13 @@ async function runBrowserModeInternal(
   const markPromptSubmitted = async (): Promise<void> => {
     promptSubmitted = true;
     submittedPromptHash = null;
+    submittedPromptSha256 = null;
+    submittedPromptLength = null;
+    submittedPromptMessageId = null;
+    submittedPromptConversationId = null;
+    submittedPromptObservationId = null;
+    answerRelationship = null;
+    promptAssociationFailure = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -1227,6 +1287,13 @@ async function runBrowserModeInternal(
                     : undefined,
                 promptSubmitted,
                 submittedPromptHash,
+                submittedPromptSha256,
+                submittedPromptLength,
+                submittedPromptMessageId,
+                submittedPromptConversationId,
+                submittedPromptObservationId,
+                answerRelationship,
+                promptAssociationFailure,
                 ownedRecoveryTarget,
                 controllerPid: process.pid,
                 researchPlan,
@@ -1514,7 +1581,6 @@ async function runBrowserModeInternal(
           : "Model picker: skipped (strategy=ignore)",
       );
     }
-    const deepResearch = config.researchMode === "deep";
     if (shouldApplyThinkingTimeSelection(config)) {
       const thinkingTargetModel = modelStrategy === "select" ? config.desiredModel : null;
       thinkingSelectionEvidence = await raceWithDisconnect(
@@ -1557,6 +1623,7 @@ async function runBrowserModeInternal(
       await withoutBrowserCancellation(() => handle.release()).catch(() => undefined);
     };
     const submitOnce = async (prompt: string, submissionAttachments: BrowserAttachment[]) => {
+      assertAttestableAttachments(config.answerCapture, submissionAttachments);
       await claimBrowserTarget(Runtime, targetClaimId);
       const baselineSnapshot = await readAssistantSnapshot(Runtime).catch(() => null);
       const baselineAssistantText =
@@ -1639,6 +1706,7 @@ async function runBrowserModeInternal(
         attachmentNames: attachmentExpectations,
         attachmentNavigationUrl,
         onPromptSubmitted: markPromptSubmitted,
+        strictCapture: strictAnswerCapture,
         webSearch: config.researchMode === "search",
       };
       const deepResearchTargetBaseline =
@@ -1655,13 +1723,34 @@ async function runBrowserModeInternal(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const renderedPromptHash = await readSubmittedPromptFingerprint(
-        Runtime,
-        previousUserMessageIds,
-        config.inputTimeoutMs,
-      );
-      if (renderedPromptHash) {
-        submittedPromptHash = renderedPromptHash;
+      const observedPrompt = strictAnswerCapture
+        ? await readBoundSubmittedPromptEvidence(
+            Runtime,
+            previousUserMessageIds,
+            prompt,
+            config.inputTimeoutMs,
+            (failure) => {
+              promptAssociationFailure = failure;
+            },
+          )
+        : await readSubmittedPromptEvidence(Runtime, previousUserMessageIds, config.inputTimeoutMs);
+      if (strictAnswerCapture && !observedPrompt) {
+        // Persist failure-only telemetry before error handling can retire the page.
+        await emitRuntimeHint();
+        if (promptAssociationFailure)
+          logger(`Prompt association failure: ${JSON.stringify(promptAssociationFailure)}`);
+        throw new Error(
+          "No unique fresh user turn matching the submitted prompt; refusing unbound answer capture",
+        );
+      }
+      if (observedPrompt) {
+        submittedPromptHash = observedPrompt.fingerprint;
+        submittedPromptSha256 = observedPrompt.sha256;
+        submittedPromptLength = observedPrompt.length;
+        submittedPromptMessageId = observedPrompt.messageId;
+        submittedPromptConversationId = observedPrompt.conversationId ?? null;
+        submittedPromptObservationId = observedPrompt.observationId ?? null;
+        if (strictAnswerCapture) bindSubmittedAnswer(Runtime, observedPrompt);
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -1716,6 +1805,7 @@ async function runBrowserModeInternal(
         prompt: promptText,
         attachments,
         fallbackSubmission,
+        answerCapture: config.answerCapture,
         submit: (submissionPrompt, submissionAttachments) =>
           raceWithDisconnect(submitOnce(submissionPrompt, submissionAttachments)),
         reloadPromptComposer,
@@ -1831,6 +1921,13 @@ async function runBrowserModeInternal(
         conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -1936,6 +2033,13 @@ async function runBrowserModeInternal(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -1976,6 +2080,7 @@ async function runBrowserModeInternal(
       turnPrompt: string,
       label: string,
     ): Promise<BrowserConversationTurn & { answerHtml: string }> => {
+      if (strictAnswerCapture) requireAnswerBinding(Runtime);
       let turnAnswer: AssistantAnswer;
       try {
         await updateConversationHint("assistant-wait", 15_000).catch(() => false);
@@ -2027,6 +2132,13 @@ async function runBrowserModeInternal(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -2065,7 +2177,6 @@ async function runBrowserModeInternal(
         }
       }
       let turnAnswerText = turnAnswer.text;
-      const turnAnswerHtml = turnAnswer.html ?? "";
       const copiedMarkdown = await raceWithDisconnect(
         withRetries(
           async () => {
@@ -2201,12 +2312,23 @@ async function runBrowserModeInternal(
           turnAnswerMarkdown = bestText;
         }
       }
+      if (strictAnswerCapture) {
+        const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
+        answerRelationship = bound.answerRelationship;
+        answerMessageId = bound.messageId;
+        return {
+          label,
+          answerText: bound.text,
+          answerMarkdown: bound.markdown,
+          answerHtml: bound.html,
+        };
+      }
       answerMessageId = turnAnswer.meta.messageId ?? undefined;
       return {
         label,
         answerText: turnAnswerText,
         answerMarkdown: turnAnswerMarkdown,
-        answerHtml: turnAnswerHtml,
+        answerHtml: turnAnswer.html ?? "",
       };
     };
 
@@ -2287,15 +2409,23 @@ async function runBrowserModeInternal(
             conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
             promptSubmitted,
             submittedPromptHash,
+            submittedPromptSha256,
+            submittedPromptLength,
+            submittedPromptMessageId,
+            submittedPromptConversationId,
+            submittedPromptObservationId,
+            answerRelationship,
+            promptAssociationFailure,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
         }),
     });
-    answerText = imageArtifacts.answerText || answerText;
-    if (imageArtifacts.markdownSuffix) {
-      answerMarkdown += imageArtifacts.markdownSuffix;
-    }
+    ({ answerText, answerMarkdown } = mergeGeneratedImageAnswer(
+      { answerText, answerMarkdown },
+      imageArtifacts,
+      config.answerCapture,
+    ));
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
       Client: client,
@@ -2335,6 +2465,14 @@ async function runBrowserModeInternal(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(
+        Runtime,
+        answerText,
+        answerMarkdown,
+        config.answerCapture,
+      );
+    }
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -2346,11 +2484,18 @@ async function runBrowserModeInternal(
         imageArtifacts.savedImages.length === imageArtifacts.imageCount &&
         fileArtifacts.savedFiles.length === fileArtifacts.fileCount,
     });
-    runStatus = "complete";
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(
+        Runtime,
+        answerText,
+        answerMarkdown,
+        config.answerCapture,
+      );
+    }
     const durationMs = Date.now() - startedAt;
     const answerChars = answerText.length;
     const answerTokens = estimateTokenCount(answerMarkdown);
-    return {
+    const result: BrowserRunResult = {
       answerText,
       answerMarkdown,
       answerHtml: answerHtml.length > 0 ? answerHtml : undefined,
@@ -2375,9 +2520,22 @@ async function runBrowserModeInternal(
       conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
       promptSubmitted,
       submittedPromptHash,
+      submittedPromptSha256,
+      submittedPromptLength,
+      submittedPromptMessageId,
+      submittedPromptConversationId,
+      submittedPromptObservationId,
+      answerRelationship,
+      promptAssociationFailure,
       ownedRecoveryTarget,
       controllerPid: process.pid,
     };
+    if (strictAnswerCapture) {
+      verifyStrictCaptureResult(result, invocationPrompt);
+      await releasePromptObservation(Runtime, submittedPromptObservationId);
+    }
+    runStatus = "complete";
+    return result;
   } catch (error) {
     if (options.signal?.aborted || error instanceof BrowserRunCancelledError) {
       runStatus = "cancelled";
@@ -2408,6 +2566,13 @@ async function runBrowserModeInternal(
         tabUrl: lastUrl,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
       };
@@ -2486,6 +2651,13 @@ async function runBrowserModeInternal(
               : undefined,
           promptSubmitted,
           submittedPromptHash,
+          submittedPromptSha256,
+          submittedPromptLength,
+          submittedPromptMessageId,
+          submittedPromptConversationId,
+          submittedPromptObservationId,
+          answerRelationship,
+          promptAssociationFailure,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -2889,6 +3061,17 @@ async function runRemoteBrowserMode(
   options: BrowserRunOptions,
   cancellation: BrowserCancellation,
 ): Promise<BrowserRunResult> {
+  const deepResearch = config.researchMode === "deep";
+  const strictAnswerCapture = config.answerCapture === "json-code";
+  assertAttestableAttachments(config.answerCapture, attachments);
+  if (
+    strictAnswerCapture &&
+    (deepResearch || normalizeBrowserFollowUpPrompts(options.followUpPrompts).length > 0)
+  ) {
+    throw new Error(
+      "Cannot establish a single observed user/assistant relationship for Deep Research or follow-up transcripts",
+    );
+  }
   const remoteChromeConfig = config.remoteChrome;
   if (!remoteChromeConfig) {
     throw new Error(
@@ -2904,6 +3087,13 @@ async function runRemoteBrowserMode(
   let lastUrl: string | undefined;
   let promptSubmitted = false;
   let submittedPromptHash: string | null = null;
+  let submittedPromptSha256: string | null = null;
+  let submittedPromptLength: number | null = null;
+  let submittedPromptMessageId: string | null = null;
+  let submittedPromptConversationId: string | null = null;
+  let submittedPromptObservationId: string | null = null;
+  let answerRelationship: AnswerRelationship | null = null;
+  let promptAssociationFailure: PromptAssociationFailure | null = null;
   let ownedRecoveryTarget: BrowserRunResult["ownedRecoveryTarget"];
   const targetClaimId = randomUUID();
   let modelSelectionEvidence: BrowserModelSelectionEvidence | undefined;
@@ -2927,6 +3117,13 @@ async function runRemoteBrowserMode(
           conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
           promptSubmitted,
           submittedPromptHash,
+          submittedPromptSha256,
+          submittedPromptLength,
+          submittedPromptMessageId,
+          submittedPromptConversationId,
+          submittedPromptObservationId,
+          answerRelationship,
+          promptAssociationFailure,
           ownedRecoveryTarget,
           controllerPid: process.pid,
           researchPlan,
@@ -2947,6 +3144,13 @@ async function runRemoteBrowserMode(
   const markPromptSubmitted = async (): Promise<void> => {
     promptSubmitted = true;
     submittedPromptHash = null;
+    submittedPromptSha256 = null;
+    submittedPromptLength = null;
+    submittedPromptMessageId = null;
+    submittedPromptConversationId = null;
+    submittedPromptObservationId = null;
+    answerRelationship = null;
+    promptAssociationFailure = null;
     await emitRuntimeHint();
     void conversationUrlMonitor?.schedule("post-submit", config.timeoutMs ?? 120_000);
   };
@@ -3151,7 +3355,6 @@ async function runRemoteBrowserMode(
           : "Model picker: skipped (strategy=ignore)",
       );
     }
-    const deepResearch = config.researchMode === "deep";
     if (shouldApplyThinkingTimeSelection(config)) {
       const thinkingTargetModel = modelStrategy === "select" ? config.desiredModel : null;
       thinkingSelectionEvidence = await withRetries(
@@ -3170,6 +3373,7 @@ async function runRemoteBrowserMode(
       );
     }
     const submitOnce = async (prompt: string, submissionAttachments: BrowserAttachment[]) => {
+      assertAttestableAttachments(config.answerCapture, submissionAttachments);
       await claimBrowserTarget(Runtime, targetClaimId);
       const baselineSnapshot = await readAssistantSnapshot(Runtime).catch(() => null);
       const baselineAssistantText =
@@ -3238,6 +3442,7 @@ async function runRemoteBrowserMode(
         attachmentNames: attachmentExpectations,
         attachmentNavigationUrl,
         onPromptSubmitted: markPromptSubmitted,
+        strictCapture: strictAnswerCapture,
         webSearch: config.researchMode === "search",
       };
       const deepResearchTargetBaseline =
@@ -3254,13 +3459,34 @@ async function runRemoteBrowserMode(
       });
       await markPromptSubmitted();
       const providerBaselineTurns = providerState.baselineTurns;
-      const renderedPromptHash = await readSubmittedPromptFingerprint(
-        Runtime,
-        previousUserMessageIds,
-        config.inputTimeoutMs,
-      );
-      if (renderedPromptHash) {
-        submittedPromptHash = renderedPromptHash;
+      const observedPrompt = strictAnswerCapture
+        ? await readBoundSubmittedPromptEvidence(
+            Runtime,
+            previousUserMessageIds,
+            prompt,
+            config.inputTimeoutMs,
+            (failure) => {
+              promptAssociationFailure = failure;
+            },
+          )
+        : await readSubmittedPromptEvidence(Runtime, previousUserMessageIds, config.inputTimeoutMs);
+      if (strictAnswerCapture && !observedPrompt) {
+        // Persist failure-only telemetry before error handling can retire the page.
+        await emitRuntimeHint();
+        if (promptAssociationFailure)
+          logger(`Prompt association failure: ${JSON.stringify(promptAssociationFailure)}`);
+        throw new Error(
+          "No unique fresh user turn matching the submitted prompt; refusing unbound answer capture",
+        );
+      }
+      if (observedPrompt) {
+        submittedPromptHash = observedPrompt.fingerprint;
+        submittedPromptSha256 = observedPrompt.sha256;
+        submittedPromptLength = observedPrompt.length;
+        submittedPromptMessageId = observedPrompt.messageId;
+        submittedPromptConversationId = observedPrompt.conversationId ?? null;
+        submittedPromptObservationId = observedPrompt.observationId ?? null;
+        if (strictAnswerCapture) bindSubmittedAnswer(Runtime, observedPrompt);
         await emitRuntimeHint();
       }
       if (typeof providerBaselineTurns === "number" && Number.isFinite(providerBaselineTurns)) {
@@ -3287,6 +3513,7 @@ async function runRemoteBrowserMode(
       prompt: promptText,
       attachments,
       fallbackSubmission: options.fallbackSubmission,
+      answerCapture: config.answerCapture,
       submit: submitOnce,
       reloadPromptComposer,
       prepareFallbackSubmission: async () => {
@@ -3392,6 +3619,13 @@ async function runRemoteBrowserMode(
         conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,
@@ -3494,6 +3728,13 @@ async function runRemoteBrowserMode(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             },
@@ -3533,6 +3774,7 @@ async function runRemoteBrowserMode(
       turnPrompt: string,
       label: string,
     ): Promise<BrowserConversationTurn & { answerHtml: string }> => {
+      if (strictAnswerCapture) requireAnswerBinding(Runtime);
       let turnAnswer: AssistantAnswer;
       try {
         await activeConversationUrlMonitor.update("assistant-wait", 15_000).catch(() => false);
@@ -3583,6 +3825,13 @@ async function runRemoteBrowserMode(
               conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
               promptSubmitted,
               submittedPromptHash,
+              submittedPromptSha256,
+              submittedPromptLength,
+              submittedPromptMessageId,
+              submittedPromptConversationId,
+              submittedPromptObservationId,
+              answerRelationship,
+              promptAssociationFailure,
               ownedRecoveryTarget,
               controllerPid: process.pid,
             };
@@ -3620,7 +3869,6 @@ async function runRemoteBrowserMode(
         }
       }
       let turnAnswerText = turnAnswer.text;
-      const turnAnswerHtml = turnAnswer.html ?? "";
 
       const copiedMarkdown = await withRetries(
         async () => {
@@ -3720,12 +3968,23 @@ async function runRemoteBrowserMode(
           turnAnswerMarkdown = bestText;
         }
       }
+      if (strictAnswerCapture) {
+        const bound = await finalizeBoundAssistantAnswer(Runtime, logger, config.answerCapture);
+        answerRelationship = bound.answerRelationship;
+        answerMessageId = bound.messageId;
+        return {
+          label,
+          answerText: bound.text,
+          answerMarkdown: bound.markdown,
+          answerHtml: bound.html,
+        };
+      }
       answerMessageId = turnAnswer.meta.messageId ?? undefined;
       return {
         label,
         answerText: turnAnswerText,
         answerMarkdown: turnAnswerMarkdown,
-        answerHtml: turnAnswerHtml,
+        answerHtml: turnAnswer.html ?? "",
       };
     };
 
@@ -3798,15 +4057,23 @@ async function runRemoteBrowserMode(
             conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
             promptSubmitted,
             submittedPromptHash,
+            submittedPromptSha256,
+            submittedPromptLength,
+            submittedPromptMessageId,
+            submittedPromptConversationId,
+            submittedPromptObservationId,
+            answerRelationship,
+            promptAssociationFailure,
             ownedRecoveryTarget,
             controllerPid: process.pid,
           },
         }),
     });
-    answerText = imageArtifacts.answerText || answerText;
-    if (imageArtifacts.markdownSuffix) {
-      answerMarkdown += imageArtifacts.markdownSuffix;
-    }
+    ({ answerText, answerMarkdown } = mergeGeneratedImageAnswer(
+      { answerText, answerMarkdown },
+      imageArtifacts,
+      config.answerCapture,
+    ));
     const fileArtifacts = await collectChatGptFileArtifacts({
       Browser: client.Browser,
       Client: client,
@@ -3846,6 +4113,14 @@ async function runRemoteBrowserMode(
       logger,
     );
     const savedArtifacts = appendArtifacts(browserArtifactsWithCapture, [transcriptArtifact]);
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(
+        Runtime,
+        answerText,
+        answerMarkdown,
+        config.answerCapture,
+      );
+    }
     const archive = await maybeArchiveCompletedConversation({
       Runtime,
       logger,
@@ -3861,8 +4136,15 @@ async function runRemoteBrowserMode(
     const answerChars = answerText.length;
     const answerTokens = estimateTokenCount(answerMarkdown);
 
-    runStatus = "complete";
-    return {
+    if (strictAnswerCapture) {
+      answerRelationship = await verifyBoundAssistantReturn(
+        Runtime,
+        answerText,
+        answerMarkdown,
+        config.answerCapture,
+      );
+    }
+    const result: BrowserRunResult = {
       answerText,
       answerMarkdown,
       answerHtml: answerHtml.length > 0 ? answerHtml : undefined,
@@ -3881,6 +4163,13 @@ async function runRemoteBrowserMode(
       conversationId: lastUrl ? extractConversationIdFromUrl(lastUrl) : undefined,
       promptSubmitted,
       submittedPromptHash,
+      submittedPromptSha256,
+      submittedPromptLength,
+      submittedPromptMessageId,
+      submittedPromptConversationId,
+      submittedPromptObservationId,
+      answerRelationship,
+      promptAssociationFailure,
       ownedRecoveryTarget,
       artifacts: savedArtifacts,
       providerNativeCapture: providerCapture.summary,
@@ -3893,6 +4182,12 @@ async function runRemoteBrowserMode(
       thinkingSelection: thinkingSelectionEvidence,
       controllerPid: process.pid,
     };
+    if (strictAnswerCapture) {
+      verifyStrictCaptureResult(result, promptText);
+      await releasePromptObservation(Runtime, submittedPromptObservationId);
+    }
+    runStatus = "complete";
+    return result;
   } catch (error) {
     if (options.signal?.aborted || error instanceof BrowserRunCancelledError) {
       runStatus = "cancelled";
@@ -3934,6 +4229,13 @@ async function runRemoteBrowserMode(
             : undefined,
         promptSubmitted,
         submittedPromptHash,
+        submittedPromptSha256,
+        submittedPromptLength,
+        submittedPromptMessageId,
+        submittedPromptConversationId,
+        submittedPromptObservationId,
+        answerRelationship,
+        promptAssociationFailure,
         ownedRecoveryTarget,
         controllerPid: process.pid,
         researchPlan,

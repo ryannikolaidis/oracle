@@ -4,6 +4,8 @@ import { buildConversationTurnCountExpression } from "../../src/browser/conversa
 import {
   browserPromptFingerprint,
   readSubmittedPromptFingerprint,
+  readSubmittedPromptEvidence,
+  readBoundSubmittedPromptEvidence,
   readUserMessageIds,
 } from "../../src/browser/promptFingerprint.js";
 import {
@@ -58,14 +60,22 @@ function evaluate(expression: string, document: FakeDocument): unknown {
     document,
     FakeElement,
     { getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) },
-    { pathname: "/", origin: "https://chatgpt.com" },
+    { href: "https://chatgpt.com/", pathname: "/", origin: "https://chatgpt.com" },
   );
 }
 function runtime(document: FakeDocument): ChromeClient["Runtime"] {
   return {
-    evaluate: async ({ expression }: { expression: string }) => ({
-      result: { value: evaluate(expression, document) },
-    }),
+    evaluate: async ({
+      expression,
+      awaitPromise,
+    }: {
+      expression: string;
+      awaitPromise?: boolean;
+    }) => {
+      const value = evaluate(expression, document);
+      if (value instanceof Promise) expect(awaitPromise).toBe(true);
+      return { result: { value: await value } };
+    },
   } as unknown as ChromeClient["Runtime"];
 }
 
@@ -79,6 +89,15 @@ describe("ChatGPT Chat/Work semantic layout", () => {
       browserPromptFingerprint("new prompt", "stable-turn"),
     );
     expect(await readSubmittedPromptFingerprint(r, ["stable-turn"])).toBeUndefined();
+  });
+  test("ordinary prompt evidence works without a conversation URL or continuity observer", async () => {
+    const { document } = fixture();
+    const r = runtime(document);
+    const evidence = await readSubmittedPromptEvidence(r, []);
+    expect(evidence).toMatchObject({ messageId: "stable-turn", length: 10 });
+    expect(evidence?.observationId).toBeUndefined();
+    expect(evidence?.conversationId).toBeUndefined();
+    expect(await readBoundSubmittedPromptEvidence(r, [], "new prompt")).toBeUndefined();
   });
   test("ignores nested legacy wrappers inside the canonical new wrapper", () => {
     const { document, turn } = fixture();

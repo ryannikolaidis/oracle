@@ -1,3 +1,4 @@
+import { assertSupportedAnswerCapture } from "../browser/strictCapture.js";
 import path from "node:path";
 import type {
   BrowserRunOptions,
@@ -338,6 +339,7 @@ export function createGeminiWebExecutor(
   geminiOptions: GeminiWebOptions,
 ): (runOptions: BrowserRunOptions) => Promise<BrowserRunResult> {
   return async (runOptions: BrowserRunOptions): Promise<BrowserRunResult> => {
+    assertSupportedAnswerCapture(runOptions.config?.answerCapture, "gemini");
     const startTime = Date.now();
     const log = runOptions.log;
 

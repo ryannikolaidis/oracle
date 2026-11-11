@@ -36,3 +36,23 @@ export function buildConversationTurnListExpression(rootExpression = "document")
 export function buildConversationTurnCountExpression(rootExpression = "document"): string {
   return `(${buildConversationTurnListExpression(rootExpression)}).length`;
 }
+
+/** Strict reads require one content bubble, including beneath nested role wrappers. */
+export function buildUserContentBubblesExpression(node = "user"): string {
+  return `(() => {
+    const root = ${node};
+    if (!root) return [];
+    const selector = '[data-user-message-bubble="true"]';
+    return [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
+  })()`;
+}
+
+/** Use the same user identity for submission, selection and recovery. */
+export function buildUserMessageIdExpression(node = "user"): string {
+  return `(${node}?.getAttribute('data-message-id') || ${node}?.getAttribute('data-chatgpt-selection-message-id') || ${node}?.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || ${node}?.closest('[data-turn-key]')?.getAttribute('data-turn-key') || ${node}?.getAttribute('data-content-search-unit-key') || ${node}?.getAttribute('data-chatgpt-search-unit-key'))`;
+}
+
+/** Preserve assistant identity precedence across capture, binding and recovery. */
+export function buildAssistantMessageIdExpression(node = "node"): string {
+  return `(${node}?.getAttribute('data-message-id') || ${node}?.getAttribute('data-chatgpt-selection-message-id') || ${node}?.getAttribute('data-chatgpt-search-message-ids')?.split(' ')[0] || ${node}?.getAttribute('data-content-search-unit-key') || ${node}?.getAttribute('data-chatgpt-search-unit-key') || ${node}?.closest('[data-turn-key]')?.getAttribute('data-turn-key'))`;
+}

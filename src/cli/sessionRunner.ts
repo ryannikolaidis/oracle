@@ -102,7 +102,18 @@ export async function performSessionRun({
     ? {
         config: browserConfig,
         ...(mode === "browser" && sessionMeta.browser?.runtime?.submittedPromptHash !== undefined
-          ? { runtime: { submittedPromptHash: null } }
+          ? {
+              runtime: {
+                promptAssociationFailure: null,
+                submittedPromptHash: null,
+                submittedPromptSha256: null,
+                submittedPromptLength: null,
+                submittedPromptMessageId: null,
+                submittedPromptConversationId: null,
+                submittedPromptObservationId: null,
+                answerRelationship: null,
+              },
+            }
           : {}),
       }
     : sessionMeta.browser;
@@ -200,6 +211,7 @@ export async function performSessionRun({
         runOptions.writeOutputPath,
         result.answerText ?? "",
         log,
+        browserConfig.answerCapture === "json-code",
       );
       checkBrowserCancellation();
       const outputArtifacts = await copyBrowserOutputArtifacts({
@@ -1283,6 +1295,7 @@ async function writeAssistantOutput(
   targetPath: string | undefined,
   content: string,
   log: (message: string) => void,
+  preserveExactBytes = false,
 ) {
   if (!targetPath) return;
   if (!content || content.trim().length === 0) {
@@ -1304,7 +1317,7 @@ async function writeAssistantOutput(
   }
   try {
     await fs.mkdir(path.dirname(normalizedTarget), { recursive: true });
-    const payload = content.endsWith("\n") ? content : `${content}\n`;
+    const payload = preserveExactBytes || content.endsWith("\n") ? content : `${content}\n`;
     await fs.writeFile(normalizedTarget, payload, "utf8");
     log(dim(`Saved assistant output to ${normalizedTarget}`));
     return normalizedTarget;
@@ -1315,7 +1328,7 @@ async function writeAssistantOutput(
       if (fallbackPath) {
         try {
           await fs.mkdir(path.dirname(fallbackPath), { recursive: true });
-          const payload = content.endsWith("\n") ? content : `${content}\n`;
+          const payload = preserveExactBytes || content.endsWith("\n") ? content : `${content}\n`;
           await fs.writeFile(fallbackPath, payload, "utf8");
           log(dim(`write-output fallback to ${fallbackPath} (original failed: ${reason})`));
           return fallbackPath;
@@ -1461,7 +1474,12 @@ async function autoReattachUntilComplete({
         });
         checkCancellation();
       }
-      await writeAssistantOutput(runOptions.writeOutputPath, answerText, log);
+      await writeAssistantOutput(
+        runOptions.writeOutputPath,
+        answerText,
+        log,
+        browserConfig.answerCapture === "json-code",
+      );
       checkCancellation();
       await sendSessionNotification(
         {
@@ -1493,7 +1511,7 @@ async function autoReattachUntilComplete({
         browser: {
           ...browserMetadata,
           config: browserConfig,
-          runtime,
+          runtime: { ...runtime, answerRelationship: result.answerRelationship },
         },
         artifacts: mergeArtifacts(sessionMeta.artifacts, artifacts),
         response: { status: "completed" },

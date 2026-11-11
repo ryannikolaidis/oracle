@@ -1,5 +1,5 @@
 import { browserPromptFingerprint } from "../../src/browser/promptFingerprint.js";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -56,6 +56,12 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
     vi.restoreAllMocks();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.resetModules();
+    // Keep endpoint discovery independent of any Chrome listening on the test machine.
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("HTTP discovery unavailable"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   test("retries via recoverConversationTab when initial harvest finds no live tab", async () => {
@@ -118,7 +124,7 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
     expect(fakeChrome.process.unref).toHaveBeenCalledTimes(1);
   });
 
-  test("retains saved browser transport during harvest and missing-tab recovery", async () => {
+  test("retains saved browser transport when discovery is unavailable during harvest and missing-tab recovery", async () => {
     const endpoint = {
       host: "127.0.0.1",
       port: 9223,
@@ -155,6 +161,9 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
     }));
     const { harvestSessionBrowserOutput } = await import("../../src/cli/browserTabs.js");
     await harvestSessionBrowserOutput("sess-recover", { quietOutput: true });
+    expect(globalThis.fetch).toHaveBeenCalledWith("http://127.0.0.1:9223/json/version", {
+      signal: expect.any(AbortSignal),
+    });
     expect(harvestChatGptTab).toHaveBeenNthCalledWith(1, expect.objectContaining(endpoint));
     expect(recoverConversationTab).toHaveBeenCalledWith(meta, expect.any(Function), {
       existingEndpoint: endpoint,
@@ -231,6 +240,7 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
         runtime: {
           ...baseMeta.browser?.runtime,
           submittedPromptHash: browserPromptFingerprint(prompt, "current-message"),
+          submittedPromptSha256: "observed-default-prompt-digest",
         },
       },
     };
@@ -851,6 +861,9 @@ describe("harvestSessionBrowserOutput recovery fallback", () => {
 describe("browser tab endpoint discovery", () => {
   test("preserves HTTP discovery and distinct saved browser sockets after restarts", async () => {
     vi.resetModules();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("discovery unavailable"));
     const collectChatGptTabs = vi.fn(async () => []);
     vi.doMock("../../src/browser/liveTabs.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("../../src/browser/liveTabs.js")>()),
@@ -873,6 +886,7 @@ describe("browser tab endpoint discovery", () => {
     }));
     const { showBrowserTabsStatus } = await import("../../src/cli/browserTabs.js");
     await showBrowserTabsStatus();
+    fetchSpy.mockRestore();
     expect(collectChatGptTabs).toHaveBeenCalledTimes(3);
     expect(collectChatGptTabs).toHaveBeenCalledWith({ host: "127.0.0.1", port: 9222 });
     for (const id of ["old", "current"])

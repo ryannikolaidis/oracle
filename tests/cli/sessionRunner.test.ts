@@ -1129,6 +1129,100 @@ describe("performSessionRun", () => {
     ]);
   });
 
+  test.each([
+    ['{"text":"Hé😀"}', false],
+    ['{"text":"Hé😀"}\n', false],
+    ['{\r\n  "text": "Hé😀"\r\n}', true],
+  ] as const)(
+    "preserves strict browser output bytes including permission fallback: %j, %s",
+    async (answer, fallback) => {
+      const outputPath = "/tmp/strict-browser-output.json";
+      const expectedBytes = Buffer.from(answer, "utf8");
+      const expectedDigest = createHash("sha256").update(expectedBytes).digest("hex");
+      vi.mocked(runBrowserSessionExecution).mockResolvedValue({
+        usage: { inputTokens: 10, outputTokens: 5, reasoningTokens: 0, totalTokens: 15 },
+        elapsedMs: 500,
+        runtime: { chromePid: 1, chromePort: 9222, userDataDir: "/tmp/chrome" },
+        answerText: answer,
+      });
+      if (fallback) {
+        vi.mocked(fsPromises.writeFile).mockRejectedValueOnce(
+          Object.assign(new Error("EACCES"), { code: "EACCES" }),
+        );
+      }
+      await performSessionRun({
+        sessionMeta: baseSessionMeta,
+        runOptions: { ...baseRunOptions, writeOutputPath: outputPath },
+        mode: "browser",
+        browserConfig: { chromePath: null, answerCapture: "json-code" },
+        cwd: "/tmp",
+        log,
+        write,
+        version: cliVersion,
+      });
+      const outputWrites = vi
+        .mocked(fsPromises.writeFile)
+        .mock.calls.filter(([target]) => String(target).includes("strict-browser-output"));
+      expect(outputWrites).toHaveLength(fallback ? 2 : 1);
+      for (const [, payload, encoding] of outputWrites) {
+        expect(encoding).toBe("utf8");
+        expect(typeof payload).toBe("string");
+        const bytes = Buffer.from(payload as string, "utf8");
+        expect(bytes.equals(expectedBytes)).toBe(true);
+        expect(createHash("sha256").update(bytes).digest("hex")).toBe(expectedDigest);
+      }
+    },
+  );
+
+  test.each(["dom-text", "json-code"] as const)(
+    "writes recovered %s answers with the appropriate byte policy",
+    async (answerCapture) => {
+      const answer = '{"text":"Hé😀"}';
+      vi.mocked(runBrowserSessionExecution).mockRejectedValueOnce(
+        new BrowserAutomationError(
+          "Chrome DevTools client disconnected before oracle finished; the browser target appears still alive.",
+          {
+            stage: "connection-lost",
+            recoverableDisconnect: true,
+            disconnectCause: "cdp-client-disconnect",
+            runtime: {
+              chromePort: 9222,
+              chromeHost: "127.0.0.1",
+              tabUrl: "https://chatgpt.com/c/demo",
+              chromeTargetId: "TARGET-1",
+              promptSubmitted: true,
+            },
+          },
+        ),
+      );
+      vi.mocked(resumeBrowserSession).mockResolvedValueOnce({
+        answerText: answer,
+        answerMarkdown: answer,
+      });
+      const outputPath = "/tmp/recovered-byte-policy.json";
+      await performSessionRun({
+        sessionMeta: baseSessionMeta,
+        runOptions: { ...baseRunOptions, writeOutputPath: outputPath },
+        mode: "browser",
+        browserConfig: { chromePath: null, answerCapture },
+        cwd: "/tmp",
+        log,
+        write,
+        version: cliVersion,
+      });
+      expect(resumeBrowserSession).toHaveBeenCalledTimes(1);
+      const outputWrites = vi
+        .mocked(fsPromises.writeFile)
+        .mock.calls.filter(([target]) => String(target) === outputPath);
+      expect(outputWrites).toHaveLength(1);
+      const expected = answerCapture === "json-code" ? answer : `${answer}\n`;
+      expect(outputWrites[0]).toEqual([outputPath, expected, "utf8"]);
+      expect(Buffer.from(outputWrites[0][1] as string, "utf8")).toEqual(
+        Buffer.from(expected, "utf8"),
+      );
+    },
+  );
+
   test("preserves browser saved files beside write-output without overwriting collisions", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oracle-browser-output-"));
     const canonicalDir = path.join(tmpDir, "session", "artifacts");
@@ -1374,6 +1468,16 @@ describe("performSessionRun", () => {
           config: { desiredModel: "Old Pro" },
           runtime: {
             submittedPromptHash,
+            promptAssociationFailure: {
+              version: 1 as const,
+              outcome: "rejected" as const,
+              reason: "text-mismatch" as const,
+              attempts: 1,
+              baselineAvailable: true,
+            },
+            submittedPromptSha256: "a".repeat(64),
+            submittedPromptLength: 123,
+            submittedPromptMessageId: "old-message",
             promptSubmitted: true,
             tabUrl: "https://chatgpt.com/c/old",
           },
@@ -1408,7 +1512,16 @@ describe("performSessionRun", () => {
       for (const update of [updates[0]?.[1], updates.at(-1)?.[1]]) {
         expect(update?.browser).toEqual({
           config: { chromePath: null },
-          runtime: { submittedPromptHash: null },
+          runtime: {
+            promptAssociationFailure: null,
+            submittedPromptHash: null,
+            submittedPromptSha256: null,
+            submittedPromptLength: null,
+            submittedPromptMessageId: null,
+            submittedPromptConversationId: null,
+            submittedPromptObservationId: null,
+            answerRelationship: null,
+          },
         });
       }
     },
