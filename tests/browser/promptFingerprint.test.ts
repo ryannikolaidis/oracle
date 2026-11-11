@@ -564,9 +564,11 @@ function collapsedRecordedUser() {
   expect(control.getAttribute("aria-expanded")).toBe("false");
   expect(control.getAttribute("data-thread-find-skip")).toBe("true");
   const tail = "Hé😀\tfinal instruction  \n";
+  const body = "synthetic row\n".repeat(4455);
+  // Match the recorded full-content size, including the tail's UTF-8 bytes.
   const prompt =
-    "synthetic line\n".repeat(4455) +
-    "x".repeat(62401 - 4455 * 14 - Buffer.byteLength(tail, "utf8")) +
+    body +
+    "x".repeat(62401 - Buffer.byteLength(body, "utf8") - Buffer.byteLength(tail, "utf8")) +
     tail;
   const preview = prompt.slice(0, 10240) + "…";
   const replaceContent = (...nodes: FakeElement[]) => {
