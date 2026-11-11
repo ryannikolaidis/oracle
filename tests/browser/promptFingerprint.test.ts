@@ -677,9 +677,18 @@ test.each([
   "new user turn",
 ])("continuity rejects competing or identity mutations: %s", async (scenario) => {
   const recorded = recordedUserTurn();
-  const other = committedUser(
+  // Start with assistant content, not a user bubble hidden by an assistant role.
+  // A second user bubble would make nested association ambiguous before mutation.
+  const other = new FakeElement(
+    "div",
+    {
+      "data-message-author-role": "assistant",
+      ...(scenario === "unidentified sibling transition"
+        ? {}
+        : { "data-message-id": recorded.messageId }),
+    },
+    [],
     "other",
-    scenario === "unidentified sibling transition" ? undefined : recorded.messageId,
   );
   // A distinct nested turn must remain distinct even with equal message IDs.
   if (scenario === "nested distinct turn") {
@@ -692,11 +701,19 @@ test.each([
   }
   // Only the observed user is present at association. The other node becomes
   // user-role later, including transitions reverted before observer delivery.
-  other.setAttribute("data-message-author-role", "assistant");
   const page = strictDomRuntime([recorded.turn, ...(other.parentElement ? [] : [other])]);
-  expect(
-    await readBoundSubmittedPromptEvidence(page.runtime, [], recorded.bubble.textContent),
-  ).toBeDefined();
+  expect(recorded.user.querySelectorAll('[data-user-message-bubble="true"]')).toEqual([
+    recorded.bubble,
+  ]);
+  const evidence = await readBoundSubmittedPromptEvidence(
+    page.runtime,
+    [],
+    recorded.bubble.textContent,
+  );
+  expect(evidence).toBeDefined();
+  expect(page.observations).toBe(1);
+  expect(page.invalidated).toBe(false);
+  bindSubmittedAnswer(page.runtime, evidence!);
   let target = other;
   let attribute = "data-message-author-role";
   if (scenario === "canonical identity") {
@@ -733,6 +750,9 @@ test.each([
         })),
   );
   expect(page.invalidated).toBe(true);
+  await expect(evaluateBoundAnswer(page.runtime, { expression: "null" })).rejects.toThrow(
+    /observation lost or invalidated/,
+  );
 });
 
 test.each([
