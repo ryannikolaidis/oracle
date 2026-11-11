@@ -331,6 +331,9 @@ export async function createRemoteServer(
         resolveBrowserProvider(model) ?? "chatgpt",
       );
       assertAttestableAttachments(payload.browserConfig?.answerCapture, payload.attachments ?? []);
+      // Strict capture cannot use upload fallback. Discard it before staging any files.
+      if (payload.browserConfig?.answerCapture === "json-code")
+        payload.fallbackSubmission = undefined;
       if (resolveBrowserProvider(model) === "gemini" && payload.options.imageOutputRequested) {
         throw new Error(
           "Remote Gemini image generation and editing are not supported; run these requests locally.",

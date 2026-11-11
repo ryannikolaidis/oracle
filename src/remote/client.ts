@@ -101,7 +101,10 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
     const payload: RemoteRunPayload = {
       prompt: options.prompt,
       attachments: await serializeAttachments(options.attachments ?? []),
-      fallbackSubmission: await serializeFallback(options.fallbackSubmission, { host, token }),
+      fallbackSubmission:
+        options.config?.answerCapture === "json-code"
+          ? undefined
+          : await serializeFallback(options.fallbackSubmission, { host, token }),
       browserConfig: {
         ...options.config,
         // Keep old hosts fail-closed for Gemini even when the picker label is unrelated.

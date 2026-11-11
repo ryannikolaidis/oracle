@@ -9,6 +9,7 @@ import {
   readUserMessageIds,
 } from "../../src/browser/promptFingerprint.js";
 import type { ChromeClient } from "../../src/browser/types.js";
+import { bindSubmittedAnswer, evaluateBoundAnswer } from "../../src/browser/answerBinding.js";
 import { FakeDocument, FakeElement } from "./domFixture.js";
 
 test("captures a new message when earlier turns unmount during submission", async () => {
@@ -372,7 +373,7 @@ function strictDomRuntime(initial: FakeElement[]) {
       calls++;
       return {
         result: {
-          value: new Function(
+          value: await new Function(
             "document",
             "location",
             "globalThis",
@@ -498,6 +499,80 @@ test.each([
     ]);
     expect(page.invalidated).toBe(false);
   }
+});
+
+test.each([
+  "data-message-author-role",
+  "data-content-search-unit-key",
+  "data-chatgpt-search-unit-key",
+])("continuity accepts insertion of same-turn wrappers through %s", async (attribute) => {
+  const recorded = recordedUserTurn();
+  const page = strictDomRuntime([recorded.turn]);
+  const prompt = recorded.bubble.textContent;
+  const evidence = await readBoundSubmittedPromptEvidence(page.runtime, [], prompt);
+  expect(evidence).toBeDefined();
+  bindSubmittedAnswer(page.runtime, evidence!);
+  const wrapper = new FakeElement("div", {
+    [attribute]: attribute === "data-message-author-role" ? "user" : "hydrated:user",
+  });
+  // Include multiple matching descendants beneath a non-role inserted root.
+  const inserted = new FakeElement("div", {}, [
+    wrapper,
+    new FakeElement("div", { "data-message-author-role": "user" }),
+  ]);
+  recorded.user.append(inserted);
+  page.mutate([
+    { type: "childList", target: recorded.user, addedNodes: [inserted], removedNodes: [] },
+  ]);
+  expect(page.invalidated).toBe(false);
+  expect(recorded.bubble.textContent).toBe(prompt);
+  await expect(evaluateBoundAnswer(page.runtime, { expression: "null" })).resolves.toMatchObject({
+    result: { value: null },
+  });
+  expect(page.observations).toBe(1);
+});
+
+test.each([
+  "sibling",
+  "relocated sibling",
+  "nested distinct turn",
+  "mixed nested subtree",
+  "bubble mutation",
+])("continuity rejects added user wrappers outside canonical ownership: %s", async (scenario) => {
+  const recorded = recordedUserTurn();
+  const page = strictDomRuntime([recorded.turn]);
+  const evidence = await readBoundSubmittedPromptEvidence(
+    page.runtime,
+    [],
+    recorded.bubble.textContent,
+  );
+  expect(evidence).toBeDefined();
+  bindSubmittedAnswer(page.runtime, evidence!);
+  const other = committedUser(recorded.bubble.textContent, recorded.messageId);
+  let inserted = other;
+  const target =
+    scenario === "sibling" || scenario === "relocated sibling"
+      ? recorded.turn
+      : scenario === "bubble mutation"
+        ? recorded.bubble
+        : recorded.user;
+  if (scenario === "nested distinct turn" || scenario === "mixed nested subtree") {
+    inserted = new FakeElement("div", { "data-turn-key": "other-turn" }, [other]);
+    if (scenario === "mixed nested subtree")
+      inserted = new FakeElement("div", { "data-message-author-role": "user" }, [inserted]);
+  }
+  target.append(inserted);
+  // Observer delivery sees the final tree. A competing insertion must still
+  // fail if the new user node moved into the canonical subtree before delivery.
+  if (scenario === "relocated sibling") {
+    inserted.remove();
+    recorded.user.append(inserted);
+  }
+  page.mutate([{ type: "childList", target, addedNodes: [inserted], removedNodes: [] }]);
+  expect(page.invalidated).toBe(true);
+  await expect(evaluateBoundAnswer(page.runtime, { expression: "null" })).rejects.toThrow(
+    /observation lost or invalidated/,
+  );
 });
 
 test.each([

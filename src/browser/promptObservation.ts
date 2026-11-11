@@ -28,7 +28,10 @@ export function buildPromptObservationExpression(user = "user"): string {
             (record.type === 'attributes' && identityAttributes.includes(record.attributeName) && (record.target === user || record.target === turn ||
               (record.attributeName === 'data-turn-key' && user.contains(record.target)))) ||
             Array.from(record.removedNodes).some(node => node === user || node.contains?.(user) || node === bubble || node.contains?.(bubble)) ||
-            Array.from(record.addedNodes).some(node => node !== user && (node.matches?.(selector) || node.querySelector?.(selector)))) {
+            Array.from(record.addedNodes).some(node => [
+              ...(node.matches?.(selector) ? [node] : []),
+              ...Array.from(node.querySelectorAll?.(selector) || []),
+            ].some(candidate => !(record.target === user || isNestedWrapper(record.target)) || !isNestedWrapper(candidate)))) {
           observation.invalidated = true;
           observer.disconnect();
         }
