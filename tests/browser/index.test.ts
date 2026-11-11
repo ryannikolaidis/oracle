@@ -1041,7 +1041,7 @@ describe("runSubmissionWithRecoveryForTest", () => {
         submit,
         reloadPromptComposer: vi.fn(async () => {}),
         prepareFallbackSubmission: clear,
-        logger: vi.fn(),
+        logger: vi.fn<(message: string) => void>(),
       }),
     ).rejects.toThrow(/cannot substitute a fallback prompt/);
     expect(submit).toHaveBeenCalledExactlyOnceWith("original prompt", []);
