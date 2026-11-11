@@ -528,7 +528,8 @@ export async function createRemoteServer(
         followUpPrompts: payload.options.followUpPrompts,
       });
 
-      if (payload.browserConfig.answerCapture === "json-code") verifyStrictCaptureResult(result);
+      if (payload.browserConfig.answerCapture === "json-code")
+        verifyStrictCaptureResult(result, payload.prompt);
       signal?.throwIfAborted();
       const artifactRegistration = await registerRemoteArtifacts({
         runId,

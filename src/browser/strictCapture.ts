@@ -20,7 +20,8 @@ export function assertAttestableAttachments(
 }
 
 /** Check the transport receipt without changing the attested answer bytes. */
-export function verifyStrictCaptureResult(result: BrowserRunResult): void {
+export function verifyStrictCaptureResult(result: BrowserRunResult, expectedPrompt: string): void {
+  const normalizedPrompt = expectedPrompt.replace(/\r\n?/g, "\n");
   const receipt = result.answerRelationship;
   if (
     !receipt ||
@@ -38,13 +39,15 @@ export function verifyStrictCaptureResult(result: BrowserRunResult): void {
     receipt.userMessageId !== result.submittedPromptMessageId ||
     receipt.userSha256 !== result.submittedPromptSha256 ||
     receipt.userLength !== result.submittedPromptLength ||
+    receipt.userSha256 !== answerDigest(normalizedPrompt) ||
+    receipt.userLength !== Buffer.byteLength(normalizedPrompt, "utf8") ||
     !Number.isSafeInteger(receipt.userLength) ||
     receipt.userLength <= 0 ||
     result.answerText !== result.answerMarkdown ||
     receipt.answerTextSha256 !== answerDigest(result.answerText) ||
     receipt.answerMarkdownSha256 !== answerDigest(result.answerMarkdown)
   ) {
-    throw new Error("Missing or mismatched json-code answer relationship; refusing remote success");
+    throw new Error("Missing or mismatched json-code answer relationship; refusing strict success");
   }
   JSON.parse(result.answerText);
 }

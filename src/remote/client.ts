@@ -50,6 +50,7 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
   return async function remoteBrowserExecutor(
     options: BrowserRunOptions,
   ): Promise<BrowserRunResult> {
+    const invocationPrompt = options.prompt;
     const model = resolveRemoteBrowserModel(
       options.model ?? runOptions?.model,
       options.config?.desiredModel,
@@ -99,7 +100,7 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
         );
     }
     const payload: RemoteRunPayload = {
-      prompt: options.prompt,
+      prompt: invocationPrompt,
       attachments: await serializeAttachments(options.attachments ?? []),
       fallbackSubmission:
         options.config?.answerCapture === "json-code"
@@ -229,7 +230,7 @@ export function createRemoteBrowserExecutor({ host, token, runOptions }: RemoteE
                 return;
               }
               if (options.config?.answerCapture === "json-code")
-                verifyStrictCaptureResult(resolved);
+                verifyStrictCaptureResult(resolved, invocationPrompt);
               if (preferredImagePath) {
                 const images = transferredArtifacts.filter((artifact) => artifact.kind === "image");
                 if (

@@ -1025,7 +1025,30 @@ describe("runSubmissionWithRecoveryForTest", () => {
     }
   });
 
-  test("strict capture refuses attachments materialized by fallback preparation before touching the composer", async () => {
+  test("strict capture never submits an attachment-free fallback prompt", async () => {
+    const tooLarge = new BrowserAutomationError("too large", { code: "prompt-too-large" });
+    const submit = vi.fn().mockRejectedValueOnce(tooLarge).mockResolvedValue({
+      baselineTurns: 1,
+      baselineAssistantText: "",
+    });
+    const clear = vi.fn(async () => {});
+    await expect(
+      runSubmissionWithRecoveryForTest({
+        prompt: "original prompt",
+        attachments: [],
+        answerCapture: "json-code",
+        fallbackSubmission: { prompt: "different prompt", attachments: [] },
+        submit,
+        reloadPromptComposer: vi.fn(async () => {}),
+        prepareFallbackSubmission: clear,
+        logger: vi.fn(),
+      }),
+    ).rejects.toThrow(/cannot substitute a fallback prompt/);
+    expect(submit).toHaveBeenCalledExactlyOnceWith("original prompt", []);
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  test("strict capture refuses fallback preparation before touching the composer", async () => {
     const attachments: Array<{ path: string; displayPath: string }> = [];
     const prepare = vi.fn(async () => {
       attachments.push({ path: "/absent/bundle.txt", displayPath: "bundle.txt" });
@@ -1045,8 +1068,8 @@ describe("runSubmissionWithRecoveryForTest", () => {
         prepareFallbackSubmission: clear,
         logger: (_message: string) => {},
       }),
-    ).rejects.toThrow(/cannot attest uploaded attachment/);
-    expect(prepare).toHaveBeenCalledOnce();
+    ).rejects.toThrow(/cannot substitute a fallback prompt/);
+    expect(prepare).not.toHaveBeenCalled();
     expect(submit).toHaveBeenCalledOnce();
     expect(clear).not.toHaveBeenCalled();
   });
@@ -1080,7 +1103,7 @@ describe("runSubmissionWithRecoveryForTest", () => {
       );
       if (answerCapture === "json-code") {
         await expect(runSubmissionWithRecoveryForTest(args)).rejects.toThrow(
-          /cannot attest uploaded attachment/,
+          /cannot substitute a fallback prompt/,
         );
         expect(submit).toHaveBeenCalledOnce();
         expect(prepared).not.toHaveBeenCalled();

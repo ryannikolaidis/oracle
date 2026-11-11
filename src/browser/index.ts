@@ -1,5 +1,5 @@
 import { releasePromptObservation } from "./promptObservation.js";
-import { assertAttestableAttachments } from "./strictCapture.js";
+import { assertAttestableAttachments, verifyStrictCaptureResult } from "./strictCapture.js";
 import {
   bindSubmittedAnswer,
   requireAnswerBinding,
@@ -592,6 +592,11 @@ async function runSubmissionWithRecovery({
 
       const isPromptTooLarge = hasBrowserErrorCode(error, "prompt-too-large");
       if (fallbackSubmission && isPromptTooLarge && !usedFallbackSubmission) {
+        if (answerCapture === "json-code") {
+          throw new Error(
+            "json-code cannot substitute a fallback prompt; use the original inline prompt",
+          );
+        }
         assertAttestableAttachments(answerCapture, fallbackSubmission.attachments);
         usedFallbackSubmission = true;
         logger("[browser] Inline prompt too large; retrying with file uploads.");
@@ -880,16 +885,17 @@ async function runBrowserModeInternal(
     subject: "Browser upload",
   });
 
-  const promptText = options.prompt?.trim();
-  if (!promptText) {
+  const invocationPrompt = options.prompt;
+  let config = resolveBrowserConfig(options.config);
+  const strictAnswerCapture = config.answerCapture === "json-code";
+  const promptText = strictAnswerCapture ? invocationPrompt : invocationPrompt?.trim();
+  if (!promptText?.trim()) {
     throw new Error("Prompt text is required when using browser mode.");
   }
 
   const fallbackSubmission = options.fallbackSubmission;
 
-  let config = resolveBrowserConfig(options.config);
   const deepResearch = config.researchMode === "deep";
-  const strictAnswerCapture = config.answerCapture === "json-code";
   assertAttestableAttachments(config.answerCapture, attachments);
   if (
     strictAnswerCapture &&
@@ -2486,12 +2492,10 @@ async function runBrowserModeInternal(
         config.answerCapture,
       );
     }
-    if (strictAnswerCapture) await releasePromptObservation(Runtime, submittedPromptObservationId);
-    runStatus = "complete";
     const durationMs = Date.now() - startedAt;
     const answerChars = answerText.length;
     const answerTokens = estimateTokenCount(answerMarkdown);
-    return {
+    const result: BrowserRunResult = {
       answerText,
       answerMarkdown,
       answerHtml: answerHtml.length > 0 ? answerHtml : undefined,
@@ -2526,6 +2530,12 @@ async function runBrowserModeInternal(
       ownedRecoveryTarget,
       controllerPid: process.pid,
     };
+    if (strictAnswerCapture) {
+      verifyStrictCaptureResult(result, invocationPrompt);
+      await releasePromptObservation(Runtime, submittedPromptObservationId);
+    }
+    runStatus = "complete";
+    return result;
   } catch (error) {
     if (options.signal?.aborted || error instanceof BrowserRunCancelledError) {
       runStatus = "cancelled";
@@ -4134,9 +4144,7 @@ async function runRemoteBrowserMode(
         config.answerCapture,
       );
     }
-    if (strictAnswerCapture) await releasePromptObservation(Runtime, submittedPromptObservationId);
-    runStatus = "complete";
-    return {
+    const result: BrowserRunResult = {
       answerText,
       answerMarkdown,
       answerHtml: answerHtml.length > 0 ? answerHtml : undefined,
@@ -4174,6 +4182,12 @@ async function runRemoteBrowserMode(
       thinkingSelection: thinkingSelectionEvidence,
       controllerPid: process.pid,
     };
+    if (strictAnswerCapture) {
+      verifyStrictCaptureResult(result, promptText);
+      await releasePromptObservation(Runtime, submittedPromptObservationId);
+    }
+    runStatus = "complete";
+    return result;
   } catch (error) {
     if (options.signal?.aborted || error instanceof BrowserRunCancelledError) {
       runStatus = "cancelled";

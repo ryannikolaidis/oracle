@@ -159,3 +159,46 @@ test.each([false, true])(
     }
   },
 );
+
+test.each(["digest", "byte length"] as const)(
+  "strict client rejects a self-consistent receipt with the wrong prompt %s",
+  async (mismatch) => {
+    const wrongResult: BrowserRunResult = {
+      ...result,
+      submittedPromptSha256:
+        mismatch === "digest" ? digest("other source!") : result.submittedPromptSha256,
+      submittedPromptLength:
+        mismatch === "byte length" ? Buffer.byteLength(prompt) + 1 : result.submittedPromptLength,
+      answerRelationship: {
+        ...result.answerRelationship!,
+        userSha256:
+          mismatch === "digest" ? digest("other source!") : result.answerRelationship!.userSha256,
+        userLength:
+          mismatch === "byte length"
+            ? Buffer.byteLength(prompt) + 1
+            : result.answerRelationship!.userLength,
+      },
+    };
+    const server = http.createServer(async (req, res) => {
+      for await (const _chunk of req) {
+        /* drain the request */
+      }
+      res.end(`${JSON.stringify({ type: "result", result: wrongResult })}\n`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("missing address");
+      await expect(
+        createRemoteBrowserExecutor({ host: `127.0.0.1:${address.port}` })({
+          prompt,
+          config: { answerCapture: "json-code" },
+        }),
+      ).rejects.toThrow(/mismatched json-code answer relationship/);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  },
+);
