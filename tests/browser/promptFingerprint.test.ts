@@ -572,7 +572,7 @@ function collapsedRecordedUser() {
     tail;
   const preview = prompt.slice(0, 10240) + "…";
   const replaceContent = (...nodes: FakeElement[]) => {
-    for (const child of [...recorded.bubble.children]) child.remove();
+    for (const child of recorded.bubble.children.slice()) child.remove();
     for (const child of nodes) recorded.bubble.append(child);
   };
   replaceContent(new FakeElement("div", {}, [], preview), control);
