@@ -1,3 +1,4 @@
+import { buildUserMessageContentExpression } from "./userMessageContent.js";
 import { buildMismatchSamplingExpression } from "./promptMismatchSampling.js";
 import { buildPromptObservationExpression } from "./promptObservation.js";
 import { buildUserMessageExpansionExpression } from "./userMessageExpansion.js";
@@ -378,7 +379,8 @@ export async function readSubmittedPromptEvidence(
             if (bubbles.length !== 1) return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'non-unique-user-content' } };
             const bubble = bubbles[0];
             let expansionRejected = false;
-            if (typeof bubble.textContent === 'string' && bubble.textContent.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
+            const initialText = ${buildUserMessageContentExpression()};
+            if (typeof initialText !== 'string' || initialText.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
               const expansion = await ${buildUserMessageExpansionExpression(normalizedSubmittedPrompt ?? "")};
               if (expansion === 'continuity-unavailable' || (typeof expansion === 'object' && !expansion.finish())) return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'continuity-unavailable' } };
               expansionRejected = expansion === 'text-mismatch';
@@ -386,7 +388,7 @@ export async function readSubmittedPromptEvidence(
             const mismatchStarted = performance.now();
             const mismatchTurn = user.closest('[data-turn-key]');
             const mismatchHref = typeof location === 'object' ? location.href : undefined;
-            const text = bubble.textContent;
+            const text = ${buildUserMessageContentExpression()};
             const conversationId = typeof location === 'object' && typeof location.href === 'string'
               ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined;
             Object.assign(diagnostic, {
@@ -429,7 +431,7 @@ export async function readSubmittedPromptEvidence(
               diagnostic,
               observationId,
               conversationId: typeof location === 'object' && typeof location.href === 'string' ? location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] : undefined,
-              text: ${requireContinuity ? "bubble" : `(user.querySelector('[data-user-message-bubble="true"]') || user)`}.textContent,
+              text: ${requireContinuity ? "text" : `(user.querySelector('[data-user-message-bubble="true"]') || user).textContent`},
               messageId,
             };
           }

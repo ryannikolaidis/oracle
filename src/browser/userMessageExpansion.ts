@@ -1,3 +1,4 @@
+import { buildUserMessageContentExpression } from "./userMessageContent.js";
 import {
   buildUserContentBubblesExpression,
   buildUserMessageIdExpression,
@@ -70,8 +71,9 @@ export function buildUserMessageExpansionExpression(expected: string): string {
       for (;;) {
         if (!stable()) return 'continuity-unavailable';
         // Only the caller's subsequent full DOM read can establish binding.
-        if (typeof bubble.textContent === 'string' &&
-            bubble.textContent.replace(/\\r\\n?/g, '\\n') === ${JSON.stringify(expected)}) {
+        const text = ${buildUserMessageContentExpression()};
+        if (typeof text === 'string' &&
+            text.replace(/\\r\\n?/g, '\\n') === ${JSON.stringify(expected)}) {
           handedOff = true;
           return { finish: () => { try { return stable(); } finally { disconnect(); } } };
         }

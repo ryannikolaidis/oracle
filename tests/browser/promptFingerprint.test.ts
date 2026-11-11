@@ -509,7 +509,10 @@ test.each([0, 2])(
 
 // Read the recorded user subtree, including both nested role wrappers and the
 // bubble's controls. Keep its enclosing turn identity from the same fixture.
-function recordedUserTurn(fixture: "completed" | "streaming" = "completed") {
+function recordedUserTurn(
+  fixture: "completed" | "streaming" | "expanded" = "completed",
+  content = "SYNTHETIC_CONTENT",
+) {
   const html = readFileSync(
     new URL(`../fixtures/chatgpt-dom-2026-09/${fixture}.html`, import.meta.url),
     "utf8",
@@ -532,7 +535,12 @@ function recordedUserTurn(fixture: "completed" | "streaming" = "completed") {
       else text += tokens[cursor++];
     }
     cursor++;
-    return new FakeElement(name, attributes, children, text);
+    return new FakeElement(
+      name,
+      attributes,
+      children,
+      text === "SYNTHETIC_CONTENT" ? content : text,
+    );
   };
   const user = parse();
   const inner = user.querySelector('[data-content-search-unit-key$=":user"]')!;
@@ -555,14 +563,22 @@ function collapsedRecordedUser() {
   expect(control.textContent).toBe("Show more");
   expect(control.getAttribute("aria-expanded")).toBe("false");
   expect(control.getAttribute("data-thread-find-skip")).toBe("true");
-  const prompt = "synthetic line\n".repeat(4500) + "Hé😀\tfinal instruction  \n";
+  const tail = "Hé😀\tfinal instruction  \n";
+  const prompt =
+    "synthetic line\n".repeat(4455) +
+    "x".repeat(62401 - 4455 * 14 - Buffer.byteLength(tail, "utf8")) +
+    tail;
   const preview = prompt.slice(0, 10240) + "…";
   const replaceContent = (...nodes: FakeElement[]) => {
     for (const child of [...recorded.bubble.children]) child.remove();
     for (const child of nodes) recorded.bubble.append(child);
   };
   replaceContent(new FakeElement("div", {}, [], preview), control);
-  const expand = () => replaceContent(new FakeElement("div", {}, [], prompt));
+  const expand = () => {
+    // Keep the expanded control in the bubble, as in the live user message.
+    const expanded = recordedUserTurn("expanded", prompt);
+    replaceContent(...expanded.bubble.children);
+  };
   const click = vi.fn(expand);
   Object.assign(control, { click });
   const page = strictDomRuntime([recorded.turn], true);
@@ -577,6 +593,8 @@ test("expands the recorded user control and binds all bytes beyond the 10240-cha
   });
   const evidence = await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt);
   expect(fixture.click).toHaveBeenCalledTimes(1);
+  expect(Buffer.byteLength(fixture.prompt, "utf8")).toBe(62401);
+  expect(fixture.bubble.textContent).toBe(fixture.prompt + "Show less");
   expect(evidence).toMatchObject({
     messageId: fixture.messageId,
     sha256: createHash("sha256").update(fixture.prompt).digest("hex"),
@@ -625,6 +643,73 @@ test("keeps the expansion guard active across the promise handoff", async () => 
     await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt),
   ).toBeUndefined();
   expect(fixture.page.navigationListeners).toBe(0);
+});
+
+test.each([
+  "misleading label",
+  "misleading aria label",
+  "wrong role",
+  "extra button",
+  "extra role control",
+  "extra expanded control",
+  "wrong state",
+  "missing state",
+  "wrong type",
+  "disabled",
+  "aria disabled",
+  "wrong owner",
+])("expanded content rejects %s even when the raw text is requested", async (scenario) => {
+  const fixture = collapsedRecordedUser();
+  fixture.expand();
+  const control = fixture.bubble.querySelector("button")!;
+  if (scenario === "misleading label")
+    control.append(new FakeElement("span", {}, [], " unrelated"));
+  if (scenario === "misleading aria label") control.setAttribute("aria-label", "Delete message");
+  if (scenario === "wrong role") control.setAttribute("role", "link");
+  if (scenario === "extra button") fixture.bubble.append(new FakeElement("button", {}, [], ""));
+  if (scenario === "extra role control")
+    fixture.bubble.append(new FakeElement("span", { role: "button" }, [], ""));
+  if (scenario === "extra expanded control")
+    fixture.bubble.append(new FakeElement("div", { "aria-expanded": "true" }, [], ""));
+  if (scenario === "wrong state") control.setAttribute("aria-expanded", "false");
+  if (scenario === "missing state") control.setAttribute("aria-expanded", "");
+  if (scenario === "wrong type") control.setAttribute("type", "submit");
+  if (scenario === "disabled") control.setAttribute("disabled", "");
+  if (scenario === "aria disabled") control.setAttribute("aria-disabled", "true");
+  if (scenario === "wrong owner") {
+    control.remove();
+    fixture.bubble.append(
+      new FakeElement("div", { "data-user-message-bubble": "true" }, [control]),
+    );
+  }
+  for (const expected of [fixture.prompt, fixture.bubble.textContent]) {
+    expect(
+      await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], expected),
+    ).toBeUndefined();
+  }
+  expect(fixture.click).not.toHaveBeenCalled();
+});
+
+test("expanded content preserves literal control labels, Unicode, whitespace and the complete tail", async () => {
+  const fixture = collapsedRecordedUser();
+  fixture.expand();
+  const control = fixture.bubble.querySelector("button")!;
+  const prompt = "  Show less\r\nShow more Hé😀\tfinal  \n";
+  fixture.replaceContent(new FakeElement("div", {}, [], prompt), control);
+  expect(await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], prompt)).toMatchObject({
+    sha256: createHash("sha256").update(prompt.replace(/\r\n?/g, "\n")).digest("hex"),
+    fingerprint: browserPromptFingerprint(prompt, fixture.messageId),
+  });
+  expect(
+    await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], prompt.trim()),
+  ).toBeUndefined();
+  expect(
+    await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], prompt + "Show less"),
+  ).toBeUndefined();
+  const legacy = await readSubmittedPromptEvidence(fixture.page.runtime, []);
+  expect(legacy?.fingerprint).toBe(
+    browserPromptFingerprint(prompt + "Show less", fixture.messageId),
+  );
 });
 
 test.each([

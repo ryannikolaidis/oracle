@@ -1,3 +1,4 @@
+import { buildUserMessageContentExpression } from "./userMessageContent.js";
 import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
 import { browserPromptFingerprint, type SubmittedPromptEvidence } from "./promptFingerprint.js";
@@ -105,7 +106,7 @@ export function buildAnswerRelationshipExpression(): string {
       conversationId: location.href.match(/\\/c\\/([a-zA-Z0-9-]+)/)?.[1] ?? null,
       userMessageId: ${buildUserMessageIdExpression()},
       userIds: users.map(item => { const user = item.node; return ${buildUserMessageIdExpression()}; }),
-      userText: bubbles.length === 1 ? bubbles[0].textContent : null,
+      userText: bubbles.length === 1 ? ${buildUserMessageContentExpression("bubbles[0]")} : null,
       assistantIds: after.map(item => id(item.node)),
       roles: after.map(item => item.role),
     };

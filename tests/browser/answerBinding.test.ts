@@ -105,6 +105,69 @@ test("accepts only the observed user and the identified following assistant, pre
   expect(result.result.value).toEqual({ text: "The bound answer", messageId: "answer-original" });
 });
 
+function expandedUser() {
+  const observed = user();
+  const bubble = observed.children[0]!;
+  const control = new FakeElement(
+    "button",
+    { type: "button", "aria-expanded": "true" },
+    [],
+    "Show less",
+  );
+  bubble.append(control);
+  return { observed, bubble, control };
+}
+
+test("revalidates expanded content before and after answer selection without changing the DOM", async () => {
+  const { observed, bubble } = expandedUser();
+  const p = page([observed, assistant()]);
+  await expect(evaluateBoundAnswer(p.runtime, selection)).resolves.toMatchObject({
+    result: { value: { text: "The bound answer", messageId: "answer-original" } },
+  });
+  expect(bubble.textContent).toBe(prompt + "Show less");
+});
+
+test.each(["before", "during"])(
+  "rejects expanded-content ambiguity or edits %s selection",
+  async (phase) => {
+    for (const scenario of [
+      "label",
+      "state",
+      "extra button",
+      "extra role control",
+      "extra expanded control",
+      "tail",
+      "identity",
+      "navigation",
+    ]) {
+      const { observed, bubble, control } = expandedUser();
+      const p = page([observed, assistant()]);
+      const change = () => {
+        if (scenario === "label") control.append(new FakeElement("span", {}, [], " other"));
+        if (scenario === "state") control.setAttribute("aria-expanded", "false");
+        if (scenario === "extra button") bubble.append(new FakeElement("button"));
+        if (scenario === "extra role control")
+          bubble.append(new FakeElement("span", { role: "button" }));
+        if (scenario === "extra expanded control")
+          bubble.append(new FakeElement("span", { "aria-expanded": "true" }));
+        if (scenario === "tail") bubble.append(new FakeElement("span", {}, [], "changed"));
+        if (scenario === "identity") observed.setAttribute("data-message-id", "replacement");
+        if (scenario === "navigation")
+          p.location.href = "https://chatgpt.com/c/another-conversation";
+      };
+      if (phase === "before") change();
+      else p.setDuring(change);
+      await expect(
+        evaluateBoundAnswer(p.runtime, {
+          ...selection,
+          expression: `(during(), ${selection.expression})`,
+        }),
+      ).rejects.toThrow();
+      await expect(evaluateBoundAnswer(p.runtime, selection)).rejects.toThrow(/invalidated/);
+    }
+  },
+);
+
 test("accepts one content bubble beneath nested user-role wrappers", async () => {
   const nested = new FakeElement("div", { "data-message-author-role": "user" }, [user()]);
   const turn = new FakeElement("div", { "data-turn-key": "user-original" }, [nested, assistant()]);
