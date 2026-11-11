@@ -143,6 +143,7 @@ function associationFailure(
     "non-unique-user-content",
     "text-mismatch",
     "no-fresh-user",
+    "continuity-unavailable",
   ];
   const reason: PromptAssociationFailure["reason"] =
     previousMessageIds === undefined
