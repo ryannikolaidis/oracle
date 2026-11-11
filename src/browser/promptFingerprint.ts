@@ -1,5 +1,6 @@
 import { buildMismatchSamplingExpression } from "./promptMismatchSampling.js";
 import { buildPromptObservationExpression } from "./promptObservation.js";
+import { buildUserMessageExpansionExpression } from "./userMessageExpansion.js";
 import { createHash } from "node:crypto";
 import type { ChromeClient } from "./types.js";
 import {
@@ -376,6 +377,12 @@ export async function readSubmittedPromptEvidence(
             diagnostic.bubbleCount = bubbles.length;
             if (bubbles.length !== 1) return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'non-unique-user-content' } };
             const bubble = bubbles[0];
+            let expansionRejected = false;
+            if (typeof bubble.textContent === 'string' && bubble.textContent.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
+              const expansion = await ${buildUserMessageExpansionExpression(normalizedSubmittedPrompt ?? "")};
+              if (expansion === 'continuity-unavailable' || (typeof expansion === 'object' && !expansion.finish())) return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'continuity-unavailable' } };
+              expansionRejected = expansion === 'text-mismatch';
+            }
             const mismatchStarted = performance.now();
             const mismatchTurn = user.closest('[data-turn-key]');
             const mismatchHref = typeof location === 'object' ? location.href : undefined;
@@ -388,7 +395,7 @@ export async function readSubmittedPromptEvidence(
               conversationAvailable: typeof conversationId === 'string' && !!conversationId,
               observationAvailable: false,
             });
-            if (typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
+            if (expansionRejected || typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
               // Diagnostic reads cannot supply successful binding evidence.
               const scopes = {};
               for (const [name, node] of [['bubble', bubble], ['user', user], ['turn', user.closest('[data-turn-key]')]]) {

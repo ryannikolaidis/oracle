@@ -509,9 +509,9 @@ test.each([0, 2])(
 
 // Read the recorded user subtree, including both nested role wrappers and the
 // bubble's controls. Keep its enclosing turn identity from the same fixture.
-function recordedUserTurn() {
+function recordedUserTurn(fixture: "completed" | "streaming" = "completed") {
   const html = readFileSync(
-    new URL("../fixtures/chatgpt-dom-2026-09/completed.html", import.meta.url),
+    new URL(`../fixtures/chatgpt-dom-2026-09/${fixture}.html`, import.meta.url),
     "utf8",
   );
   const start = html.indexOf('<div class="group/user-message flex flex-col items-end gap-2"');
@@ -539,7 +539,7 @@ function recordedUserTurn() {
   const bubble = user.querySelector('[data-user-message-bubble="true"]')!;
   expect(user.getAttribute("data-chatgpt-search-unit-key")).toBe("fallback-turn-0:0:user");
   expect(inner.getAttribute("data-content-search-unit-key")).toBe("fallback-turn-0:0:user");
-  expect(bubble.textContent).toBe("Reply with exactly: OK");
+  if (fixture === "completed") expect(bubble.textContent).toBe("Reply with exactly: OK");
   return {
     turn: new FakeElement("div", { "data-turn-key": turnId }, [user]),
     user,
@@ -548,6 +548,186 @@ function recordedUserTurn() {
     messageId: user.getAttribute("data-chatgpt-search-message-ids")!,
   };
 }
+
+function collapsedRecordedUser() {
+  const recorded = recordedUserTurn("streaming");
+  const control = recorded.bubble.querySelector("button")!;
+  expect(control.textContent).toBe("Show more");
+  expect(control.getAttribute("aria-expanded")).toBe("false");
+  expect(control.getAttribute("data-thread-find-skip")).toBe("true");
+  const prompt = "synthetic line\n".repeat(4500) + "Hé😀\tfinal instruction  \n";
+  const preview = prompt.slice(0, 10240) + "…";
+  const replaceContent = (...nodes: FakeElement[]) => {
+    for (const child of [...recorded.bubble.children]) child.remove();
+    for (const child of nodes) recorded.bubble.append(child);
+  };
+  replaceContent(new FakeElement("div", {}, [], preview), control);
+  const expand = () => replaceContent(new FakeElement("div", {}, [], prompt));
+  const click = vi.fn(expand);
+  Object.assign(control, { click });
+  const page = strictDomRuntime([recorded.turn], true);
+  return { ...recorded, control, prompt, preview, expand, click, page, replaceContent };
+}
+
+test("expands the recorded user control and binds all bytes beyond the 10240-character preview", async () => {
+  const fixture = collapsedRecordedUser();
+  fixture.click.mockImplementation(() => {
+    // React need not commit the expanded content in the click handler itself.
+    queueMicrotask(fixture.expand);
+  });
+  const evidence = await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt);
+  expect(fixture.click).toHaveBeenCalledTimes(1);
+  expect(evidence).toMatchObject({
+    messageId: fixture.messageId,
+    sha256: createHash("sha256").update(fixture.prompt).digest("hex"),
+    length: Buffer.byteLength(fixture.prompt, "utf8"),
+  });
+  bindSubmittedAnswer(fixture.page.runtime, evidence!);
+  await expect(
+    evaluateBoundAnswer(fixture.page.runtime, { expression: "null" }),
+  ).resolves.toMatchObject({ result: { value: null } });
+  fixture.replaceContent(new FakeElement("div", {}, [], fixture.preview));
+  await expect(evaluateBoundAnswer(fixture.page.runtime, { expression: "null" })).rejects.toThrow();
+});
+
+test("already expanded content binds without clicking and legacy capture never expands", async () => {
+  const fixture = collapsedRecordedUser();
+  const legacy = await readSubmittedPromptEvidence(fixture.page.runtime, []);
+  expect(legacy?.sha256).not.toBe(createHash("sha256").update(fixture.prompt).digest("hex"));
+  expect(fixture.click).not.toHaveBeenCalled();
+  fixture.expand();
+  expect(
+    await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt),
+  ).toMatchObject({ length: Buffer.byteLength(fixture.prompt, "utf8") });
+  expect(fixture.click).not.toHaveBeenCalled();
+});
+
+test("expands only the fresh user's control when an older collapsed user is present", async () => {
+  const old = collapsedRecordedUser();
+  old.user.setAttribute("data-chatgpt-search-message-ids", "old-user");
+  old.turn.setAttribute("data-turn-key", "old-turn");
+  const fresh = collapsedRecordedUser();
+  fresh.page.replace([old.turn, fresh.turn]);
+  expect(
+    await readBoundSubmittedPromptEvidence(fresh.page.runtime, ["old-user"], fresh.prompt),
+  ).toMatchObject({ messageId: fresh.messageId });
+  expect(fresh.click).toHaveBeenCalledTimes(1);
+  expect(old.click).not.toHaveBeenCalled();
+});
+
+test("keeps the expansion guard active across the promise handoff", async () => {
+  const fixture = collapsedRecordedUser();
+  fixture.click.mockImplementation(() => {
+    fixture.expand();
+    queueMicrotask(() => fixture.page.navigate());
+  });
+  expect(
+    await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt),
+  ).toBeUndefined();
+  expect(fixture.page.navigationListeners).toBe(0);
+});
+
+test.each([
+  "two users",
+  "two controls",
+  "misleading label",
+  "unsupported control",
+  "missing control",
+  "disabled control",
+])("refuses collapsed content with %s without clicking", async (scenario) => {
+  const fixture = collapsedRecordedUser();
+  if (scenario === "two users") {
+    fixture.page.replace([fixture.turn, committedUser(fixture.prompt, "competing")]);
+  } else if (scenario === "two controls") {
+    fixture.bubble.append(new FakeElement("button", {}, [], "Show more"));
+  } else if (scenario === "misleading label") {
+    fixture.control.append(new FakeElement("span", {}, [], " unrelated action"));
+  } else if (scenario === "unsupported control") {
+    fixture.control.setAttribute("data-thread-find-skip", "false");
+  } else if (scenario === "disabled control") {
+    fixture.control.setAttribute("disabled", "");
+  } else {
+    fixture.control.remove();
+  }
+  expect(
+    await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt),
+  ).toBeUndefined();
+  expect(fixture.click).not.toHaveBeenCalled();
+});
+
+test.each([
+  "lost user",
+  "lost bubble",
+  "identity",
+  "transient identity",
+  "navigation",
+  "competing user",
+  "extra bubble",
+])("expansion fails closed on %s even when full text becomes available", async (scenario) => {
+  const fixture = collapsedRecordedUser();
+  fixture.click.mockImplementation(() => {
+    fixture.expand();
+    if (scenario === "lost user") fixture.user.remove();
+    if (scenario === "lost bubble") fixture.bubble.remove();
+    if (scenario === "identity" || scenario === "transient identity") {
+      fixture.user.setAttribute("data-chatgpt-search-message-ids", "replacement");
+      if (scenario === "transient identity") {
+        fixture.user.setAttribute("data-chatgpt-search-message-ids", fixture.messageId);
+        fixture.page.queueMutations([
+          {
+            type: "attributes",
+            target: fixture.user,
+            attributeName: "data-chatgpt-search-message-ids",
+            addedNodes: [],
+            removedNodes: [],
+          },
+        ]);
+      }
+    }
+    if (scenario === "navigation") fixture.page.navigate();
+    if (scenario === "competing user") fixture.turn.append(committedUser(fixture.prompt, "other"));
+    if (scenario === "extra bubble")
+      fixture.user.append(
+        new FakeElement("div", { "data-user-message-bubble": "true" }, [], fixture.prompt),
+      );
+  });
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(fixture.page.runtime, [], fixture.prompt, 0, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0]![0].reason).toBe("continuity-unavailable");
+  expect(fixture.click).toHaveBeenCalledTimes(1);
+  expect(fixture.page.navigationListeners).toBe(0);
+});
+
+test.each(["unchanged preview", "incorrect tail"])(
+  "a clicked control with %s never establishes full binding",
+  async (scenario) => {
+    vi.useFakeTimers();
+    try {
+      const fixture = collapsedRecordedUser();
+      fixture.click.mockImplementation(() => {
+        if (scenario === "incorrect tail")
+          fixture.replaceContent(new FakeElement("div", {}, [], fixture.prompt.slice(0, -1) + "x"));
+      });
+      const report = vi.fn();
+      const pending = readBoundSubmittedPromptEvidence(
+        fixture.page.runtime,
+        [],
+        fixture.prompt,
+        0,
+        report,
+      );
+      await vi.runAllTimersAsync();
+      expect(await pending).toBeUndefined();
+      expect(fixture.click).toHaveBeenCalledTimes(1);
+      expect(report.mock.calls[0]![0].reason).toBe("text-mismatch");
+      expect(fixture.page.navigationListeners).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 test("strict association accepts one recorded user message with nested role wrappers", async () => {
   const recorded = recordedUserTurn();
