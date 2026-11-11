@@ -853,6 +853,7 @@ test.each([
       missingIdentities: missing,
     });
     expect(report.mock.calls[0][0].observedSha256).toBeUndefined();
+    expect(report.mock.calls[0][0]).not.toHaveProperty("scopes");
     expect(JSON.stringify(report.mock.calls)).not.toContain("private prompt");
   },
 );
@@ -1024,4 +1025,171 @@ test("association diagnostics copy only bounded allowlisted fields", async () =>
     expectedLength: 14,
     expectedSha256: createHash("sha256").update("private prompt").digest("hex"),
   });
+});
+
+test("mismatch scopes distinguish the selected bubble, canonical user and enclosing turn", async () => {
+  const expected = "private Hé😀\nfull";
+  const user = committedUser("private", "new");
+  const bubble = user.children[0];
+  user.append(new FakeElement("span", { "data-message-author-role": "user" }, [], " Hé😀\nfull"));
+  const turn = new FakeElement("article", { "data-turn-key": "turn" }, [
+    user,
+    new FakeElement("button", {}, [], "control"),
+  ]);
+  Object.defineProperty(bubble, "innerText", { get: () => expected.replace(/\n/g, "\r\n") });
+  const page = strictDomRuntime([turn]);
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], expected, 1000, report),
+  ).toBeUndefined();
+  const failure = report.mock.calls[0][0];
+  expect(failure).toMatchObject({ rawCandidates: 2, canonicalCandidates: 1, freshCandidates: 1 });
+  expect(Buffer.byteLength(JSON.stringify(failure), "utf8")).toBeLessThanOrEqual(4096);
+  expect(failure.scopes.bubble).toMatchObject({
+    textContent: { equalsExpected: false, containedByExpected: true, containsExpected: false },
+    innerText: { equalsExpected: true, length: Buffer.byteLength(expected, "utf8") },
+    readersEqual: false,
+    userCount: 0,
+    bubbleCount: 1,
+    containsUser: false,
+    containsBubble: true,
+    ownedByUser: true,
+  });
+  expect(failure.scopes.user).toMatchObject({
+    textContent: {
+      equalsExpected: true,
+      sha256: createHash("sha256").update(expected).digest("hex"),
+    },
+    readersEqual: true,
+    userCount: 2,
+    bubbleCount: 1,
+    containsUser: true,
+    containsBubble: true,
+    ownedByUser: true,
+  });
+  expect(failure.scopes.turn).toMatchObject({
+    textContent: { equalsExpected: false, containsExpected: true, containedByExpected: false },
+    userCount: 2,
+    ownedByUser: false,
+  });
+  expect(failure).not.toHaveProperty("messageId");
+  expect(JSON.stringify(failure)).not.toMatch(/private|control|https:|turn-key/);
+  expect(page.calls).toBe(1);
+  expect(page.observations).toBe(0);
+});
+
+test("scope readings omit oversized values without truncating or losing a bounded reader", async () => {
+  const user = committedUser("short", "new");
+  Object.defineProperty(user.children[0], "innerText", { get: () => "é".repeat(65_536) });
+  Object.defineProperty(user, "textContent", { get: () => "x".repeat(65_537) });
+  Object.defineProperty(user, "innerText", { get: () => "y".repeat(65_537) });
+  const page = strictDomRuntime([user]);
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], "expected", 0, report),
+  ).toBeUndefined();
+  const scopes = report.mock.calls[0][0].scopes;
+  expect(scopes.bubble.innerText.length).toBe(131_072);
+  expect(scopes.bubble.oversizedReadCount).toBe(0);
+  expect(scopes.user.oversizedReadCount).toBe(2);
+  expect(scopes.user).not.toHaveProperty("textContent");
+  expect(scopes.user).not.toHaveProperty("innerText");
+  expect(scopes.user).not.toHaveProperty("readersEqual");
+  expect(scopes).not.toHaveProperty("turn");
+  expect(JSON.stringify(scopes).length).toBeLessThan(2000);
+});
+
+test("scope getter failures retain no exception strings and cannot change mismatch rejection", async () => {
+  const user = committedUser("private", "new");
+  Object.defineProperty(user.children[0], "innerText", {
+    get: () => {
+      throw new Error("https://private.example/credential");
+    },
+  });
+  const page = strictDomRuntime([user]);
+  const report = vi.fn();
+  expect(
+    await readBoundSubmittedPromptEvidence(page.runtime, [], "expected", 1000, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0][0].scopes.bubble.unavailableReadCount).toBe(1);
+  expect(report.mock.calls[0][0].scopes.bubble).not.toHaveProperty("innerText");
+  expect(JSON.stringify(report.mock.calls)).not.toMatch(/private|credential|https:/);
+  expect(page.calls).toBe(1);
+  expect(page.observations).toBe(0);
+});
+
+test("exact success never reads alternate scopes or retains their evidence", async () => {
+  const user = committedUser("exact", "new");
+  const alternateRead = vi.fn(() => {
+    throw new Error("alternate must not be read");
+  });
+  Object.defineProperty(user, "textContent", { get: alternateRead });
+  Object.defineProperty(user.children[0], "innerText", { get: alternateRead });
+  const page = strictDomRuntime([user]);
+  const report = vi.fn();
+  const evidence = await readBoundSubmittedPromptEvidence(page.runtime, [], "exact", 0, report);
+  expect(evidence).toMatchObject({ messageId: "new", length: 5 });
+  expect(evidence).not.toHaveProperty("scopes");
+  expect(alternateRead).not.toHaveBeenCalled();
+  expect(report).not.toHaveBeenCalled();
+});
+
+test("scope metadata allowlist rejects injected evidence, private fields, invalid counts and oversized strings", async () => {
+  const report = vi.fn();
+  const runtime = {
+    evaluate: async () => ({
+      result: {
+        value: {
+          associationRejected: true,
+          diagnostic: {
+            reason: "text-mismatch",
+            freshCandidates: 1,
+            missingIdentities: 0,
+            scopes: {
+              bubble: {
+                textContent: "short",
+                innerText: "x".repeat(65_537),
+                sha256: "private",
+                length: 123,
+                equalsExpected: true,
+                messageId: "private",
+                observationId: "private",
+                conversationId: "private",
+                rawDOM: "private",
+                url: "private",
+                exception: "private",
+                userCount: Infinity,
+                bubbleCount: -1,
+                oversizedReadCount: 1e12,
+                unavailableReadCount: 1.9,
+                containsUser: "private",
+                containsBubble: true,
+                ownedByUser: false,
+              },
+              unknown: { textContent: "private" },
+            },
+          },
+        },
+      },
+    }),
+  } as unknown as ChromeClient["Runtime"];
+  expect(
+    await readBoundSubmittedPromptEvidence(runtime, [], "expected", 0, report),
+  ).toBeUndefined();
+  expect(report.mock.calls[0][0].scopes).toEqual({
+    bubble: {
+      textContent: {
+        length: 5,
+        sha256: createHash("sha256").update("short").digest("hex"),
+        equalsExpected: false,
+        containsExpected: false,
+        containedByExpected: false,
+      },
+      oversizedReadCount: 2,
+      unavailableReadCount: 1,
+      containsBubble: true,
+      ownedByUser: false,
+    },
+  });
+  expect(JSON.stringify(report.mock.calls)).not.toContain("private");
 });

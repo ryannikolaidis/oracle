@@ -37,6 +37,34 @@ export interface SubmittedPromptEvidence {
   observationId?: string;
 }
 
+// Bound each of six diagnostic-only strings before returning it from the page.
+const MAX_SCOPE_TEXT_LENGTH = 65_536;
+const SCOPE_NAMES = ["bubble", "user", "turn"] as const;
+const TEXT_READERS = ["textContent", "innerText"] as const;
+
+export interface PromptScopeTextDiagnostic {
+  /** Normalized UTF-8 bytes; an oversized reading is omitted, never truncated. */
+  length: number;
+  sha256: string;
+  equalsExpected: boolean;
+  containsExpected: boolean;
+  containedByExpected: boolean;
+}
+
+export interface PromptScopeDiagnostic {
+  textContent?: PromptScopeTextDiagnostic;
+  innerText?: PromptScopeTextDiagnostic;
+  readersEqual?: boolean;
+  unavailableReadCount?: number;
+  oversizedReadCount?: number;
+  /** Counts include the scope itself when it is a matching node. */
+  userCount?: number;
+  bubbleCount?: number;
+  containsUser?: boolean;
+  containsBubble?: boolean;
+  ownedByUser?: boolean;
+}
+
 /** Failure-only telemetry. Never a substitute for SubmittedPromptEvidence. */
 export interface PromptAssociationFailure {
   version: 1;
@@ -67,6 +95,7 @@ export interface PromptAssociationFailure {
   blockCount?: number;
   conversationAvailable?: boolean;
   observationAvailable?: boolean;
+  scopes?: Partial<Record<(typeof SCOPE_NAMES)[number], PromptScopeDiagnostic>>;
 }
 
 type FailureReporter = (failure: PromptAssociationFailure) => void;
@@ -151,6 +180,53 @@ function associationFailure(
   for (const key of ["conversationAvailable", "observationAvailable"] as const) {
     const available = diagnostic?.[key];
     if (typeof available === "boolean") failure[key] = available;
+  }
+  // Alternate scope strings are transient CDP values, never metadata or evidence.
+  // Recompute all text measurements here rather than trusting page-supplied hashes.
+  if (
+    outcome === "rejected" &&
+    reason === "text-mismatch" &&
+    diagnostic?.freshCandidates === 1 &&
+    diagnostic?.missingIdentities === 0 &&
+    typeof submittedPrompt === "string"
+  ) {
+    const expected = submittedPrompt.replace(/\r\n?/g, "\n");
+    const scopes = diagnostic.scopes as Record<string, Record<string, unknown>> | undefined;
+    for (const name of SCOPE_NAMES) {
+      const source = scopes?.[name];
+      if (!source || typeof source !== "object") continue;
+      const scope: PromptScopeDiagnostic = {};
+      const normalized: Partial<Record<(typeof TEXT_READERS)[number], string>> = {};
+      for (const reader of TEXT_READERS) {
+        const value = source[reader];
+        if (typeof value !== "string" || value.length > MAX_SCOPE_TEXT_LENGTH) continue;
+        const text = value.replace(/\r\n?/g, "\n");
+        normalized[reader] = text;
+        scope[reader] = {
+          length: Buffer.byteLength(text, "utf8"),
+          sha256: createHash("sha256").update(text, "utf8").digest("hex"),
+          equalsExpected: text === expected,
+          containsExpected: text.includes(expected),
+          containedByExpected: expected.includes(text),
+        };
+      }
+      if (normalized.textContent !== undefined && normalized.innerText !== undefined)
+        scope.readersEqual = normalized.textContent === normalized.innerText;
+      for (const key of [
+        "unavailableReadCount",
+        "oversizedReadCount",
+        "userCount",
+        "bubbleCount",
+      ] as const) {
+        const count = source[key];
+        if (typeof count === "number" && Number.isFinite(count) && count >= 0)
+          scope[key] = Math.min(key.endsWith("ReadCount") ? 2 : 1_000_000, Math.floor(count));
+      }
+      for (const key of ["containsUser", "containsBubble", "ownedByUser"] as const) {
+        if (typeof source[key] === "boolean") scope[key] = source[key];
+      }
+      (failure.scopes ??= {})[name] = scope;
+    }
   }
   return failure;
 }
@@ -258,8 +334,32 @@ export async function readSubmittedPromptEvidence(
               conversationAvailable: typeof conversationId === 'string' && !!conversationId,
               observationAvailable: false,
             });
-            if (typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)})
-              return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'text-mismatch' }, text, conversationId };`
+            if (typeof text !== 'string' || text.replace(/\\r\\n?/g, '\\n') !== ${JSON.stringify(normalizedSubmittedPrompt)}) {
+              // No additional evaluation, observation, or acceptance path.
+              // Diagnostic reads cannot supply successful binding evidence.
+              const scopes = {};
+              for (const [name, node] of [['bubble', bubble], ['user', user], ['turn', user.closest('[data-turn-key]')]]) {
+                if (!node) continue;
+                const scope = { unavailableReadCount: 0, oversizedReadCount: 0 };
+                try {
+                  scope.containsUser = node.contains(user);
+                  scope.containsBubble = node.contains(bubble);
+                  scope.ownedByUser = user.contains(node);
+                  scope.userCount = node.querySelectorAll('[data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]').length + Number(node.matches('[data-message-author-role="user"], [data-content-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":user"]'));
+                  scope.bubbleCount = node.querySelectorAll('[data-user-message-bubble="true"]').length + Number(node.matches('[data-user-message-bubble="true"]'));
+                } catch {}
+                for (const reader of ['textContent', 'innerText']) {
+                  try {
+                    const value = node === bubble && reader === 'textContent' ? text : node[reader];
+                    if (typeof value !== 'string') scope.unavailableReadCount++;
+                    else if (value.length > ${MAX_SCOPE_TEXT_LENGTH}) scope.oversizedReadCount++;
+                    else scope[reader] = value;
+                  } catch { scope.unavailableReadCount++; }
+                }
+                scopes[name] = scope;
+              }
+              return { associationRejected: true, diagnostic: { ...diagnostic, reason: 'text-mismatch', scopes }, text, conversationId };
+            }`
                 : ""
             }
             const observationId = ${requireContinuity ? `typeof location === 'object' ? ${buildPromptObservationExpression()} : undefined` : "undefined"};
