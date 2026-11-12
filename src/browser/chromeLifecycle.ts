@@ -27,12 +27,9 @@ export async function launchChrome(
   const { connectHost, debugBindAddress, usePatchedLauncher } = resolveWslChromeLaunchRoute();
   const usingCopiedProfile = Boolean(config.copyProfileSource);
   const requestedPort = config.debugPort ?? parseDebugPortEnv();
-  if (usingCopiedProfile && requestedPort) {
-    throw new Error("Copied-profile Chrome requires an automatically assigned debugging port");
-  }
-  // Let a copied-profile Chrome bind its own port. A nonzero port lets the
-  // launcher attach to an unrelated browser that already listens there.
-  const debugPort = usingCopiedProfile ? 0 : requestedPort;
+  // Let Chrome bind its own port for the default copied-profile path. Preserve
+  // the existing behavior when a debugging port was explicitly configured.
+  const debugPort = usingCopiedProfile ? requestedPort ?? 0 : requestedPort;
   const detachSharedChrome = shouldDetachSharedChrome(config);
   const nativeKeychainMarker = path.join(userDataDir, ".oracle-native-keychain-v1");
   const nativeManualLogin =

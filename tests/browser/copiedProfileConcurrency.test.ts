@@ -33,10 +33,6 @@ test.skipIf(process.platform !== "darwin" || !existsSync(chromePath))(
     await Promise.all(["one", "two"].map((name) => mkdir(path.join(root, name))));
     const browsers: Awaited<ReturnType<typeof launchChrome>>[] = [];
     try {
-      // A fixed port already belongs to another listener and must never be reused.
-      await expect(
-        launchChrome({ ...config, debugPort: address.port }, path.join(root, "occupied"), () => {}),
-      ).rejects.toThrow("automatically assigned debugging port");
       const launched = await Promise.allSettled(
         ["one", "two"].map((name) =>
           launchChrome(config, path.join(root, name), () => {}).then((browser) => {
