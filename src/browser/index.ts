@@ -1023,7 +1023,7 @@ async function runBrowserModeInternal(
     };
   }
 
-  if (!config.remoteChrome && !config.manualLogin) {
+  if (!config.remoteChrome && !config.manualLogin && (!config.copyProfileSource || config.debugPort)) {
     const preferredPort = config.debugPort ?? DEFAULT_DEBUG_PORT;
     const availablePort = await cancellation.call(() =>
       pickAvailableDebugPort(preferredPort, logger),

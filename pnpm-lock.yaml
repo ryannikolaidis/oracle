@@ -32,8 +32,8 @@ importers:
         specifier: ^6.0.1
         version: 6.0.1
       chrome-launcher:
-        specifier: ^1.2.1
-        version: 1.2.1(supports-color@10.2.2)
+        specifier: ^1.2.3
+        version: 1.2.3(supports-color@10.2.2)
       chrome-remote-interface:
         specifier: ^0.34.0
         version: 0.34.0
@@ -1174,8 +1174,8 @@ packages:
   chardet@2.2.0:
     resolution: {integrity: sha512-rddelWYNPRrXq6PtNEN2S3f6t9ILzvqaN5pVgi4kqt9jHQaXIial9PznB5iSPVlQSLNaaH22ItWz3EJtQ10+OA==}
 
-  chrome-launcher@1.2.1:
-    resolution: {integrity: sha512-qmFR5PLMzHyuNJHwOloHPAHhbaNglkfeV/xDtt5b7xiFFyU1I+AZZX0PYseMuhenJSSirgxELYIbswcoc+5H4A==}
+  chrome-launcher@1.2.3:
+    resolution: {integrity: sha512-IpQuNUYnpXXq3VBRJInM7zTZDiAp/cu+zy0X74NjyQtFcZIQBbI64i0PYQO25wNwgmgw2cPBYitVmFz53N11Rg==}
     engines: {node: '>=12.13.0'}
     hasBin: true
 
@@ -3175,7 +3175,7 @@ snapshots:
 
   chardet@2.2.0: {}
 
-  chrome-launcher@1.2.1(supports-color@10.2.2):
+  chrome-launcher@1.2.3(supports-color@10.2.2):
     dependencies:
       '@types/node': 26.6.3
       escape-string-regexp: 4.0.0

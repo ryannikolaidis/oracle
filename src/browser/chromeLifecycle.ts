@@ -25,8 +25,11 @@ export async function launchChrome(
   logger: BrowserLogger,
 ) {
   const { connectHost, debugBindAddress, usePatchedLauncher } = resolveWslChromeLaunchRoute();
-  const debugPort = config.debugPort ?? parseDebugPortEnv();
   const usingCopiedProfile = Boolean(config.copyProfileSource);
+  const requestedPort = config.debugPort ?? parseDebugPortEnv();
+  // Let Chrome bind its own port for the default copied-profile path. Preserve
+  // the existing behavior when a debugging port was explicitly configured.
+  const debugPort = usingCopiedProfile ? requestedPort ?? 0 : requestedPort;
   const detachSharedChrome = shouldDetachSharedChrome(config);
   const nativeKeychainMarker = path.join(userDataDir, ".oracle-native-keychain-v1");
   const nativeManualLogin =
@@ -75,6 +78,7 @@ export async function launchChrome(
           ignoreDefaultFlags: launchOptions.ignoreDefaultFlags,
         },
         detachSharedChrome,
+        usingCopiedProfile,
       );
   const pidLabel = typeof launcher.pid === "number" ? ` (pid ${launcher.pid})` : "";
   if (nativeManualLogin) {
@@ -158,12 +162,24 @@ function chromeLauncherModuleOverrides(
 async function launchWithStableProcessLifecycle(
   options: ChromeLauncherOptions,
   detachSharedChrome: boolean,
+  copiedProfile = false,
 ): Promise<LaunchedChrome> {
-  if (!detachSharedChrome) {
+  if (!detachSharedChrome && !copiedProfile) {
     return launch(options);
   }
   const launcher = new Launcher(options, chromeLauncherModuleOverrides(detachSharedChrome));
-  await launcher.launch();
+  try {
+    await launcher.launch();
+  } catch (error) {
+    if (copiedProfile) {
+      try {
+        launcher.kill();
+      } catch {
+        // Preserve the launch error if cleanup also fails.
+      }
+    }
+    throw error;
+  }
   return launchedChromeFromLauncher(launcher);
 }
 
@@ -1321,7 +1337,18 @@ async function launchWithCustomHost({
     };
   }
 
-  await launcher.launch();
+  try {
+    await launcher.launch();
+  } catch (error) {
+    if (requestedPort === 0) {
+      try {
+        launcher.kill();
+      } catch {
+        // Preserve the launch error if cleanup also fails.
+      }
+    }
+    throw error;
+  }
 
   return {
     ...launchedChromeFromLauncher(launcher),
