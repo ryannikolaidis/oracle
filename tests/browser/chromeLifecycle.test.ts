@@ -33,6 +33,28 @@ vi.doMock("../../src/browser/profileState.js", async () => {
   };
 });
 
+test("cleans up its copied-profile launcher when startup fails", async () => {
+  const { Launcher } = await import("chrome-launcher");
+  const { launchChrome } = await import("../../src/browser/chromeLifecycle.js");
+  const { resolveBrowserConfig } = await import("../../src/browser/config.js");
+  vi.stubEnv("ORACLE_BROWSER_PORT", "");
+  vi.stubEnv("ORACLE_BROWSER_DEBUG_PORT", "");
+  vi.stubEnv("ORACLE_BROWSER_REMOTE_DEBUG_HOST", "");
+  vi.stubEnv("WSL_HOST_IP", "");
+  const launch = vi.spyOn(Launcher.prototype, "launch").mockRejectedValue(new Error("startup failed"));
+  const kill = vi.spyOn(Launcher.prototype, "kill").mockImplementation(() => {});
+  try {
+    await expect(
+      launchChrome(resolveBrowserConfig({ copyProfileSource: "/fixture" }), "/fixture-copy", vi.fn()),
+    ).rejects.toThrow("startup failed");
+    expect(kill).toHaveBeenCalledOnce();
+  } finally {
+    launch.mockRestore();
+    kill.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});
+
 describe("registerTerminationHooks", () => {
   test("kills Chrome and removes a copied profile on an in-flight signal", async () => {
     const { registerTerminationHooks } = await import("../../src/browser/chromeLifecycle.js");
